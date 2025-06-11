@@ -1,14 +1,22 @@
-# Start with an OpenJDK base image
-FROM openjdk:17-jdk-slim
+# ---- Build Stage ----
+FROM gradle:8.5.0-jdk17 AS builder
 
-# Set the working directory inside the container
 WORKDIR /app
 
-# Copy the built jar from host to container
-COPY build/libs/autoevaluator-0.0.1-SNAPSHOT.jar app.jar
+# Copy everything (excluding what's in .dockerignore)
+COPY . .
 
-# Expose port 8080 (or your Spring Boot port)
-EXPOSE 8082
+# Build the application
+RUN gradle build --no-daemon
 
-# Command to run the app
+# ---- Runtime Stage ----
+FROM openjdk:17-jdk-slim
+
+WORKDIR /app
+
+# Copy the jar from the build stage
+COPY --from=builder /app/build/libs/autoevaluator-0.0.1-SNAPSHOT.jar app.jar
+
+EXPOSE 8080
+
 ENTRYPOINT ["java", "-jar", "app.jar"]
