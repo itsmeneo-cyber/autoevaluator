@@ -1,20 +1,19 @@
 package com.autoevaluator.config;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.*;
 
 @Configuration
 public class WebConfig implements WebMvcConfigurer {
 
+    @Value("${spring.web.frontend-url:http://localhost:3000}") // fallback to localhost if not set
+    private String frontendUrl;
+
     @Override
     public void addCorsMappings(CorsRegistry registry) {
-        String origin = System.getenv("FRONTEND_URL");
-        if (origin == null || origin.isBlank()) {
-            origin = "http://localhost:3000"; // fallback for local
-        }
-
         registry.addMapping("/**")
-                .allowedOrigins(origin)
+                .allowedOrigins(frontendUrl)
                 .allowedMethods("*")
                 .allowCredentials(true);
     }
