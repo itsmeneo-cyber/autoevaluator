@@ -8,21 +8,25 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 public class AutoevaluatorApplication {
 
 	public static void main(String[] args) {
-		// Load environment variables from .env file (in project root)
+		// Load from .env file for local dev only
 		Dotenv dotenv = Dotenv.configure()
-				.ignoreIfMissing() // avoid crash on Render
+				.ignoreIfMissing()
 				.load();
 
-		// Set required properties so Spring Boot can resolve ${...}
-		System.setProperty("JDBC_URL", dotenv.get("JDBC_URL", ""));
-		System.setProperty("DB_USER", dotenv.get("DB_USER", ""));
-		System.setProperty("DB_PASS", dotenv.get("DB_PASS", ""));
-		System.setProperty("MAIL_USER", dotenv.get("MAIL_USER", ""));
-		System.setProperty("MAIL_PASS", dotenv.get("MAIL_PASS", ""));
-
-		// ✅ Add OCR URL support
-		System.setProperty("OCR_URL", dotenv.get("OCR_URL", "http://localhost:8000"));
+		// Set only if not already defined by Render (which uses env vars)
+		setIfAbsent("JDBC_URL", dotenv.get("JDBC_URL", ""));
+		setIfAbsent("DB_USER", dotenv.get("DB_USER", ""));
+		setIfAbsent("DB_PASS", dotenv.get("DB_PASS", ""));
+		setIfAbsent("MAIL_USER", dotenv.get("MAIL_USER", ""));
+		setIfAbsent("MAIL_PASS", dotenv.get("MAIL_PASS", ""));
+		setIfAbsent("OCR_URL", dotenv.get("OCR_URL", "http://localhost:8000"));
 
 		SpringApplication.run(AutoevaluatorApplication.class, args);
+	}
+
+	private static void setIfAbsent(String key, String value) {
+		if (System.getenv(key) == null && System.getProperty(key) == null) {
+			System.setProperty(key, value);
+		}
 	}
 }
