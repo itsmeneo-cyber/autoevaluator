@@ -24,6 +24,7 @@ public class EvaluationService {
     private final StudentRepository studentRepository;
     private final CourseRepository courseRepository;
     private final QuestionPaperRepository questionPaperRepository;
+    private final ScoringService scoringService;
 
     public List<EvaluationResponseDto> evaluateMidterm(String studentUsername, String courseName) {
         Student student = studentRepository.findByUsername(studentUsername)
@@ -137,7 +138,7 @@ public class EvaluationService {
             String correctAnswer = question.getAnswerKey() != null ? question.getAnswerKey().getCorrectAnswer() : "";
             int questionMarks = question.getMarks().intValue();
 
-            Double obtainedMarks = simulateScoringApiCall(correctAnswer, studentAnswer, questionMarks);
+            Double obtainedMarks = scoringService.simulateScoringApiCall(correctAnswer, studentAnswer, questionMarks);
 
             AnswerScore answerScore = AnswerScore.builder()
                     .answerLabel(qNo)
@@ -307,11 +308,5 @@ public class EvaluationService {
     }
 
 
-    private Double simulateScoringApiCall(String correctAnswer, String studentAnswer, int questionMarks) {
 
-        //Call Actual Bert model or chatgpt here
-        if (Objects.equals(studentAnswer, ""))
-            return (double) 0;
-        return questionMarks/2 *1.1;
-    }
 }

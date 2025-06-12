@@ -27,12 +27,10 @@ public abstract class BaseRestController {
     public ResponseEntity<ErrorResponse> handleValidationError(Exception ex, WebRequest request) {
         return ResponseEntity.badRequest().body(asValidationError(request.getLocale()));
     }
+
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<ErrorResponse> handleRuntimeException(RuntimeException ex, WebRequest request) {
-        // Log the exception if needed
 
-
-        // You can return a custom error response here
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(new ErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR.value(), "An unexpected error occurred."));
     }
