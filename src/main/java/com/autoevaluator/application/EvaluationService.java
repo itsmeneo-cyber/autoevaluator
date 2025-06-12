@@ -1,6 +1,8 @@
 package com.autoevaluator.application;
 
 import com.autoevaluator.domain.dto.AnswerScoreDto;
+import com.autoevaluator.domain.dto.CompareAnswersRequest;
+import com.autoevaluator.domain.dto.CompareAnswersResponse;
 import com.autoevaluator.domain.dto.EvaluationResponseDto;
 import com.autoevaluator.domain.entity.*;
 import com.autoevaluator.domain.exception.BadRequestException;
@@ -9,7 +11,11 @@ import com.autoevaluator.domain.repositories.EnrolmentRepository;
 import com.autoevaluator.domain.repositories.QuestionPaperRepository;
 import com.autoevaluator.domain.repositories.StudentRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.*;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
 
 import java.util.*;
 import java.util.regex.Matcher;
@@ -24,7 +30,11 @@ public class EvaluationService {
     private final StudentRepository studentRepository;
     private final CourseRepository courseRepository;
     private final QuestionPaperRepository questionPaperRepository;
-    private final ScoringService scoringService;
+
+
+    @Value("${spring.scoring.api-url}")
+    private String scoringApiUrl;
+
 
     public List<EvaluationResponseDto> evaluateMidterm(String studentUsername, String courseName) {
         Student student = studentRepository.findByUsername(studentUsername)
@@ -138,7 +148,7 @@ public class EvaluationService {
             String correctAnswer = question.getAnswerKey() != null ? question.getAnswerKey().getCorrectAnswer() : "";
             int questionMarks = question.getMarks().intValue();
 
-            Double obtainedMarks = scoringService.simulateScoringApiCall(correctAnswer, studentAnswer, questionMarks);
+            Double obtainedMarks = simulateScoringApiCall(correctAnswer, studentAnswer, questionMarks);
 
             AnswerScore answerScore = AnswerScore.builder()
                     .answerLabel(qNo)
@@ -307,6 +317,39 @@ public class EvaluationService {
                 .toList();
     }
 
+    private Double simulateScoringApiCall(String correctAnswer, String studentAnswer, int questionMarks) {
+        if (studentAnswer == null || studentAnswer.trim().isEmpty()) {
+            return 0.0;
+        }
 
+        CompareAnswersRequest requestBody = new CompareAnswersRequest();
+        requestBody.setTeacher_answer(correctAnswer);
+        requestBody.setStudent_answer(studentAnswer);
+        requestBody.setTotal_marks(questionMarks);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        HttpEntity<CompareAnswersRequest> entity = new HttpEntity<>(requestBody, headers);
+
+        RestTemplate restTemplate = new RestTemplate();
+
+        ResponseEntity<CompareAnswersResponse> response = restTemplate.exchange(
+                scoringApiUrl,
+                HttpMethod.POST,
+                entity,
+                CompareAnswersResponse.class
+        );
+
+        if (!response.getStatusCode().is2xxSuccessful()) {
+            throw new RuntimeException("Scoring API failed with status: " + response.getStatusCode());
+        }
+
+        CompareAnswersResponse body = response.getBody();
+        if (body == null) {
+            throw new RuntimeException("Scoring API response was empty");
+        }
+
+        return body.getScore();
+    }
 
 }
