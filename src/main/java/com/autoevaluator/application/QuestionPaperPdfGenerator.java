@@ -13,6 +13,7 @@ import java.io.ByteArrayOutputStream;
 import java.util.List;
 
 public class QuestionPaperPdfGenerator {
+
     public static byte[] generateQuestionPaper(
             String collegeName,
             String logoPath,
@@ -30,14 +31,13 @@ public class QuestionPaperPdfGenerator {
         PdfDocument pdf = new PdfDocument(writer);
         Document document = new Document(pdf);
 
-        // Header: College name and logo
+        // Header
         float[] columnWidths = {1, 0.25f};
         Table headerTable = new Table(columnWidths);
         headerTable.setWidth(500);
 
-        // Left cell
         Paragraph left = new Paragraph()
-                .add("NATIONAL INSTITUTE OF TECHNOLOGY SRINAGAR" + "\n")
+                .add("NATIONAL INSTITUTE OF TECHNOLOGY SRINAGAR\n")
                 .add("DEPARTMENT OF " + departmentName.toUpperCase() + "\n")
                 .setFontSize(10)
                 .setBold();
@@ -48,7 +48,6 @@ public class QuestionPaperPdfGenerator {
                 .setPadding(20);
         headerTable.addCell(leftCell);
 
-        // Right cell (logo)
         Cell rightCell = new Cell().setBorder(null)
                 .setTextAlignment(TextAlignment.RIGHT)
                 .setVerticalAlignment(VerticalAlignment.MIDDLE)
@@ -65,7 +64,7 @@ public class QuestionPaperPdfGenerator {
         document.add(headerTable);
         document.add(new LineSeparator(new DashedLine(1)));
 
-        // Paper Info Block
+        // Paper Info
         Paragraph paperInfo = new Paragraph()
                 .add("Course: " + courseName + " (" + courseCode + ")\n")
                 .add("Semester: " + semester + "\n")
@@ -80,24 +79,45 @@ public class QuestionPaperPdfGenerator {
 
         document.add(new LineSeparator(new DashedLine(1)));
 
-        // Questions Section
+        // Questions
         if (questions != null && !questions.isEmpty()) {
             int count = 1;
             for (String q : questions) {
                 if (q == null || q.trim().isEmpty()) q = "[No question text]";
+
                 int marksIndex = q.lastIndexOf("(Marks:");
                 String leftPart = (marksIndex > 0) ? q.substring(0, marksIndex).trim() : q;
                 String marksPart = (marksIndex > 0) ? q.substring(marksIndex).trim() : "";
 
-                Paragraph question = new Paragraph("Q" + count + ". " + leftPart + "       " + marksPart)
-                        .setBold()
-                        .setMarginBottom(5);
-                document.add(question);
+                // Extract instructions
+                String instructions = "";
+                int instrIndex = leftPart.lastIndexOf(" - Instructions:");
+                if (instrIndex != -1) {
+                    instructions = leftPart.substring(instrIndex + " - Instructions:".length()).trim();
+                    leftPart = leftPart.substring(0, instrIndex).trim();
+                }
+
+                // Bold question line
+                Paragraph questionPara = new Paragraph()
+                        .add(new Text("Q" + count + ". " + leftPart + " " + marksPart).setBold())
+                        .setMarginBottom(instructions.isEmpty() ? 20 : 5); // more gap before next block
+                document.add(questionPara);
+
+                // Italic instructions if any
+                if (!instructions.isEmpty()) {
+                    Paragraph instrPara = new Paragraph()
+                            .add(new Text("Instructions: " + instructions).setItalic())
+                            .setFontSize(10)
+                            .setMarginBottom(15); // spacing after instructions
+                    document.add(instrPara);
+                }
+
                 count++;
             }
         }
 
         document.close();
+        System.out.println(examTime);
         return baos.toByteArray();
     }
 }

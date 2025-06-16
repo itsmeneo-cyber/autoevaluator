@@ -6,7 +6,10 @@ import com.autoevaluator.domain.entity.*;
 import com.autoevaluator.domain.exception.BadRequestException;
 import com.autoevaluator.domain.models.UserPrincipal;
 import com.autoevaluator.domain.repositories.*;
+import com.autoevaluator.util.InMemoryMultipartFile;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -15,13 +18,14 @@ import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -29,6 +33,8 @@ import java.util.stream.Stream;
 public class TeacherService {
     @Value("${file.upload-dir}")
     private String fileUploadDir;
+    @Autowired
+    private SimpMessagingTemplate messagingTemplate;
     private final CourseRepository courseRepository;
     private final AppUserRepository appUserRepository;
     private final QuestionPaperRepository questionPaperRepository;
@@ -160,7 +166,6 @@ public class TeacherService {
         return savedPaper.getId();
     }
 
-
     // Get Question Paper by ID
     public QuestionPaperResponse getQuestionPaperById(Long id) {
         // Check if the current user has permission to view this paper
@@ -170,7 +175,7 @@ public class TeacherService {
         QuestionPaper questionPaper = questionPaperRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Question Paper not found with ID: " + id));
 
-        // Map QuestionPaper -> QuestionPaperResponse manually
+        // Map QuestionPaper -> QuestionPaperResponse
         QuestionPaperResponse response = new QuestionPaperResponse();
         response.setId(questionPaper.getId());
         response.setSemester(questionPaper.getSemester());
@@ -178,37 +183,50 @@ public class TeacherService {
         response.setCollegeName(questionPaper.getCollegeName());
         response.setCourseName(questionPaper.getCourseName());
         response.setCourseCode(questionPaper.getCourse().getCourseCode());
+
         if (questionPaper.isMidterm())
             response.setType("Midterm");
-        System.out.println(response.getType());
+
         if (questionPaper.isEndterm())
             response.setType("Endterm");
-        if (questionPaper.getIsAssignment()!=null && questionPaper.getIsAssignment() == true)
+
+        if (Boolean.TRUE.equals(questionPaper.getIsAssignment()))
             response.setType("Assignment");
-        System.out.println(response.getType());
-       // response.setCourseName(questionPaper.getCourse().getCoursename());
+
         response.setCreator(questionPaper.getCreatedBy().getUsername());
-        response.setQuestions(
-                questionPaper.getQuestions()
-                        .stream()
-                        .map(q -> {
-                            QuestionAnswerDTO qa = new QuestionAnswerDTO();
-                            System.out.println("Q" + q.getQuestionNumber() + " Instructions: " + q.getInstructions());
-                            qa.setQuestionText(q.getText());
-                            qa.setCorrectAnswer(q.getAnswerKey() != null ? q.getAnswerKey().getCorrectAnswer() : null);
-                            qa.setMarks(q.getMarks());
-                            qa.setId(q.getId());
-                            qa.setQuestionNumber(q.getQuestionNumber()); // FIXED LINE
-                            qa.setInstructions(q.getInstructions());
-                            return qa;
-                        })
 
-                        .toList()
-        );
-        System.out.println(response.getType());
+        // Sort questions by numeric value of questionNumber (ascending)
+        List<QuestionAnswerDTO> sortedQuestions = questionPaper.getQuestions()
+                .stream()
+                .sorted((q1, q2) -> {
+                    try {
+                        int num1 = Integer.parseInt(q1.getQuestionNumber().trim());
+                        int num2 = Integer.parseInt(q2.getQuestionNumber().trim());
+                        return Integer.compare(num1, num2);
+                    } catch (NumberFormatException e) {
+                        return 0; // fallback if parsing fails
+                    }
+                })
+                .map(q -> {
+                    QuestionAnswerDTO qa = new QuestionAnswerDTO();
+                    qa.setQuestionText(q.getText());
+                    qa.setCorrectAnswer(q.getAnswerKey() != null ? q.getAnswerKey().getCorrectAnswer() : null);
+                    qa.setMarks(q.getMarks());
+                    qa.setId(q.getId());
+                    qa.setQuestionNumber(q.getQuestionNumber());
+                    qa.setInstructions(q.getInstructions());
+                    return qa;
+                })
+                .collect(Collectors.toList());
 
+        // Optional debug log
+        sortedQuestions.forEach(q -> System.out.println("Q: " + q.getQuestionNumber()));
+
+        response.setQuestions(sortedQuestions);
         return response;
     }
+
+
 
     // Add Question to Paper
     @Transactional
@@ -270,7 +288,7 @@ public class TeacherService {
                     .anyMatch(q -> !q.getId().equals(questionId) &&
                             q.getQuestionNumber().equals(questionRequest.getQuestionNumber()));
             if (questionNumberExists) {
-                throw new RuntimeException("Question number already exists in the question paper.");
+                throw new BadRequestException("Question number already exists in the question paper.");
             }
         }
 
@@ -347,6 +365,8 @@ public class TeacherService {
 
 
     public List<QuestionPaperResponse> getAllQuestionPapersByTeacher(String courseName, Integer semester) {
+        System.out.println(courseName);
+        System.out.println(semester);
         AppUser teacher = getCurrentUser();
         if (teacher == null) {
             throw new RuntimeException("Teacher not found");
@@ -372,38 +392,118 @@ public class TeacherService {
             });
         }
 
-        return filteredStream.map(questionPaper -> {
-            QuestionPaperResponse response = new QuestionPaperResponse();
-            response.setId(questionPaper.getId());
-            response.setSemester(questionPaper.getSemester());
-            response.setCourseName(questionPaper.getCourse().getCourseName());
-            response.setDepartmentName(questionPaper.getDepartmentName());
-            response.setCollegeName(questionPaper.getCollegeName());
-            response.setQuestions(null);
-            response.setTotalMarks(questionPaper.getTotalMarks());
-            if (questionPaper.getAssignmentNumber()!= null)
-                response.setAssignmentNumber(questionPaper.getAssignmentNumber());
-            if (questionPaper.isMidterm()) {
-                response.setType("Midterm");
-            } else if (questionPaper.isEndterm()) {
-                response.setType("Endterm");
-            } else if (questionPaper.getIsAssignment() == true) {
-                response.setType("Assignment");
-            } else {
-                response.setType(null);
-            }
-            try {
-                response.setLastModifiedAt(LocalDateTime.parse(questionPaper.getCreatedAt()));
-            } catch (Exception e) {
-                System.out.println(e);
-            }
+        return filteredStream
+                .map(questionPaper -> {
+                    QuestionPaperResponse response = new QuestionPaperResponse();
+                    response.setId(questionPaper.getId());
+                    response.setSemester(questionPaper.getSemester());
+                    response.setCourseName(questionPaper.getCourse().getCourseName());
+                    response.setDepartmentName(questionPaper.getDepartmentName());
+                    response.setCollegeName(questionPaper.getCollegeName());
+                    response.setQuestions(null);
+                    List<Question> questions = questionPaper.getQuestions(); // You need to add a getter for this if not present
+                    if (questions != null) {
+                        double sum = questions.stream()
+                                .filter(q -> q.getMarks() != null)
+                                .mapToDouble(Question::getMarks)
+                                .sum();
+                        response.setMarksSoFar(sum);
+                    } else {
+                        response.setMarksSoFar(0.0);
+                    }
+                    response.setTotalMarks(questionPaper.getTotalMarks());
 
-            return response;
-        }).collect(Collectors.toList());
+                    if (questionPaper.getAssignmentNumber() != null)
+                        response.setAssignmentNumber(questionPaper.getAssignmentNumber());
+
+                    if (questionPaper.isMidterm()) {
+                        response.setType("Midterm");
+                    } else if (questionPaper.isEndterm()) {
+                        response.setType("Endterm");
+                    } else if (Boolean.TRUE.equals(questionPaper.getIsAssignment())) {
+                        response.setType("Assignment");
+                    } else {
+                        response.setType(null);
+                    }
+
+                    try {
+                        response.setLastModifiedAt(LocalDateTime.parse(questionPaper.getCreatedAt()));
+                    } catch (Exception e) {
+                        System.out.println(e);
+                    }
+
+                    return response;
+                })
+                .sorted(Comparator.comparing(QuestionPaperResponse::getLastModifiedAt, Comparator.nullsLast(Comparator.reverseOrder())))
+                .collect(Collectors.toList());
     }
 
 
     // Helper method to get the current authenticated username
+    @Transactional(readOnly = true)
+    public StudentResponse getStudentDashboardInfoByUsername(
+            String collegeName,
+            String departmentName,
+            int semester,
+            String courseName,
+            String studentUsername
+    ) {
+        College college = collegeRepository.findByName(collegeName)
+                .orElseThrow(() -> new RuntimeException("College not found"));
+
+        Department department = departmentRepository.findByName(departmentName)
+                .orElseThrow(() -> new RuntimeException("Department not found"));
+
+        Course course = courseRepository.findByCourseName(courseName)
+                .orElseThrow(() -> new RuntimeException("Course not found"));
+
+        Student student = studentRepository.findByUsernameAndCollegeAndDepartmentAndSemester(
+                studentUsername, college, department, semester
+        ).orElseThrow(() -> new RuntimeException("Student not found"));
+
+        return buildStudentResponse(student, course);
+    }
+
+    private StudentResponse buildStudentResponse(Student student, Course course) {
+        StudentResponse response = new StudentResponse();
+
+        response.setId(student.getId());
+        response.setRollno(student.getRollNo());
+        response.setName(student.getName());
+        response.setUsername(student.getUsername());
+
+        Enrolment enrolment = student.getEnrolments().stream()
+                .filter(e -> e.getCourse().getCourseName().equals(course.getCourseName()))
+                .findFirst()
+                .orElse(null);
+
+        if (enrolment != null) {
+            if (StringUtils.hasText(enrolment.getMidtermAnswerSheetText())) {
+                response.setMidtermAnswerSheetUrl("Some url");
+            }
+            if (StringUtils.hasText(enrolment.getEndtermAnswerSheetText())) {
+                response.setEndtermAnswerSheetUrl("Some url");
+            }
+
+            response.setEndtermAnswerSheetUrl(enrolment.getEndtermAnswerSheetUrl());
+            response.setMidtermMarks(enrolment.getMidtermMarks());
+            response.setEndtermMarks(enrolment.getEndtermMarks());
+
+            List<StudentResponse.AssignmentData> assignmentDataList = enrolment.getAssignments().stream()
+                    .map(a -> {
+                        StudentResponse.AssignmentData assignmentData = new StudentResponse.AssignmentData();
+                        assignmentData.setAssignmentTitle(a.getAssignmentNumber());
+                        assignmentData.setAnswerSheetUrl(a.getAnswerSheetUrl());
+                        assignmentData.setMarks(a.getMarks());
+                        return assignmentData;
+                    })
+                    .collect(Collectors.toList());
+
+            response.setAssignments(assignmentDataList);
+        }
+
+        return response;
+    }
 
     @Transactional(readOnly = true)
     public List<StudentResponse> getStudentDashboardInfo(String collegeName, String departmentName, int semester, String courseName) {
@@ -420,7 +520,7 @@ public class TeacherService {
                 college, department, semester, course
         );
 
-        return students.stream()
+        List<StudentResponse> sortedResponses = students.stream()
                 .map(student -> {
                     StudentResponse response = new StudentResponse();
 
@@ -445,7 +545,6 @@ public class TeacherService {
                         response.setMidtermMarks(enrolment.getMidtermMarks());
                         response.setEndtermMarks(enrolment.getEndtermMarks());
 
-                        // ✅ Map assignment submissions
                         List<StudentResponse.AssignmentData> assignmentDataList = enrolment.getAssignments().stream()
                                 .map(a -> {
                                     StudentResponse.AssignmentData assignmentData = new StudentResponse.AssignmentData();
@@ -461,11 +560,117 @@ public class TeacherService {
 
                     return response;
                 })
+                .sorted(Comparator.comparingInt(s -> extractLastThreeDigits(s.getRollno())))
                 .collect(Collectors.toList());
+
+        // ✅ Print roll numbers to verify sorting
+        System.out.println("Sorted Roll Numbers:");
+        sortedResponses.forEach(s -> System.out.println(s.getRollno()));
+
+        return sortedResponses;
+    }
+    @Async("externalTaskExecutor")
+    @Transactional
+    public void uploadMidtermSheetAsync(String studentUsername, String courseName, List<MultipartFile> files, String teacherUsername) {
+        try {
+            uploadAnswerSheet(studentUsername, courseName, files, AnswerSheetType.MIDTERM, "");
+
+            Student student = studentRepository.findByUsername(studentUsername)
+                    .orElseThrow(() -> new RuntimeException("Student not found"));
+
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("type", "MIDTERM_UPLOAD_SUCCESS");
+            payload.put("studentUsername", studentUsername);
+            payload.put("courseName", courseName);
+            payload.put("collegeName", student.getCollege().getName());
+            payload.put("departmentName", student.getDepartment().getName());
+            payload.put("semester", student.getSemester());
+
+            notifyStructuredClient(teacherUsername, payload);
+
+        } catch (Exception e) {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("type", "MIDTERM_UPLOAD_FAILURE");
+            payload.put("studentUsername", studentUsername);
+            payload.put("courseName", courseName);
+            payload.put("message", "❌ Midterm upload failed");
+            notifyStructuredClient(teacherUsername, payload);
+        }
     }
 
+    @Async("externalTaskExecutor")
     @Transactional
-    public String uploadAnswerSheet(String studentUsername, String courseName, MultipartFile file, AnswerSheetType type, String assignmentNumber) {
+    public void uploadEndtermSheetAsync(String studentUsername, String courseName, List<MultipartFile> files, String teacherUsername) {
+        try {
+            uploadAnswerSheet(studentUsername, courseName, files, AnswerSheetType.ENDTERM, "");
+
+            Student student = studentRepository.findByUsername(studentUsername)
+                    .orElseThrow(() -> new RuntimeException("Student not found"));
+
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("type", "ENDTERM_UPLOAD_SUCCESS");
+            payload.put("studentUsername", studentUsername);
+            payload.put("courseName", courseName);
+            payload.put("collegeName", student.getCollege().getName());
+            payload.put("departmentName", student.getDepartment().getName());
+            payload.put("semester", student.getSemester());
+
+            notifyStructuredClient(teacherUsername, payload);
+
+        } catch (Exception e) {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("type", "ENDTERM_UPLOAD_FAILURE");
+            payload.put("studentUsername", studentUsername);
+            payload.put("courseName", courseName);
+            payload.put("message", "❌ Endterm upload failed");
+            notifyStructuredClient(teacherUsername, payload);
+        }
+    }
+    @Async("externalTaskExecutor")
+    @Transactional
+    public void uploadAssignmentSheetAsync(
+            String studentUsername,
+            String courseName,
+            List<MultipartFile> files,
+            String assignmentNumber,
+            String teacherUsername) {
+        try {
+            uploadAnswerSheet(studentUsername, courseName, files, AnswerSheetType.ASSIGNMENT, assignmentNumber);
+
+            Student student = studentRepository.findByUsername(studentUsername)
+                    .orElseThrow(() -> new RuntimeException("Student not found"));
+
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("type", "ASSIGNMENT_UPLOAD_SUCCESS");
+            payload.put("studentUsername", studentUsername);
+            payload.put("courseName", courseName);
+            payload.put("assignmentNumber", assignmentNumber);
+            payload.put("collegeName", student.getCollege().getName());
+            payload.put("departmentName", student.getDepartment().getName());
+            payload.put("semester", student.getSemester());
+
+            notifyStructuredClient(teacherUsername, payload);
+
+        } catch (Exception e) {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("type", "ASSIGNMENT_UPLOAD_FAILURE");
+            payload.put("studentUsername", studentUsername);
+            payload.put("courseName", courseName);
+            payload.put("assignmentNumber", assignmentNumber);
+            payload.put("message", "❌ Assignment upload failed");
+            notifyStructuredClient(teacherUsername, payload);
+        }
+    }
+
+
+
+    private void notifyStructuredClient(String teacherUsername, Map<String, Object> payload) {
+        messagingTemplate.convertAndSend("/topic/uploads/" + teacherUsername, payload);
+    }
+
+
+    @Transactional
+    public String uploadAnswerSheet(String studentUsername, String courseName, List<MultipartFile> files, AnswerSheetType type, String assignmentNumber) {
         try {
             Student student = studentRepository.findByUsername(studentUsername)
                     .orElseThrow(() -> new RuntimeException("Student not found"));
@@ -475,22 +680,35 @@ public class TeacherService {
                     .findFirst()
                     .orElseThrow(() -> new RuntimeException("Enrolment for course not found"));
 
-            // 🔥 OCR call
-            String extractedText = ocrClient.extractText(file);
+            // 🔥 OCR call: Process each image and concatenate text
 
+
+            String fullText = ocrClient.extractText(files);
+
+
+            // ✅ Parse structured answers
+            Map<String, String> answerMap = parseAnswerSheetText(fullText);
+            String structuredText = answerMap.entrySet().stream()
+                    .map(e -> e.getKey() + ": " + e.getValue())
+                    .collect(Collectors.joining("\n\n"));
+
+            // 🔗 Dummy sheet URL for now (replace with actual storage logic if needed)
+            String sheetUrl = "https://example.com/sheet-uploaded-location";
+
+            // 💾 Save structured text + sheet URL
             switch (type) {
                 case MIDTERM -> {
-                    enrolment.setMidtermAnswerSheetUrl("Some sheet url"); // or leave it unchanged
-                    enrolment.setMidtermAnswerSheetText(extractedText);
+                    enrolment.setMidtermAnswerSheetUrl(sheetUrl);
+                    enrolment.setMidtermAnswerSheetText(structuredText);
                 }
                 case ENDTERM -> {
-                    enrolment.setEndtermAnswerSheetUrl("some sheet url"); // or leave it unchanged
-                    enrolment.setEndtermAnswerSheetText(extractedText);
+                    enrolment.setEndtermAnswerSheetUrl(sheetUrl);
+                    enrolment.setEndtermAnswerSheetText(structuredText);
                 }
                 case ASSIGNMENT -> {
                     AssignmentSubmission submission = new AssignmentSubmission();
-                    submission.setAnswerSheetUrl("some sheet url"); // or skip setting it
-                    submission.setAssignmentSheetText(extractedText);
+                    submission.setAssignmentSheetText(structuredText);
+                    submission.setAnswerSheetUrl(sheetUrl);
                     submission.setAssignmentNumber(assignmentNumber);
                     submission.setEnrolment(enrolment);
                     enrolment.getAssignments().add(submission);
@@ -498,7 +716,7 @@ public class TeacherService {
             }
 
             enrolmentRepository.save(enrolment);
-            return "Text extracted and saved successfully.";
+            return "Structured answer sheet uploaded and saved successfully.";
 
         } catch (Exception e) {
             throw new RuntimeException("Error uploading file: " + e.getMessage(), e);
@@ -571,19 +789,6 @@ public class TeacherService {
 
 
 
-    public String uploadMidtermSheet(String studentUsername, String courseName, MultipartFile file) {
-        return uploadAnswerSheet(studentUsername, courseName, file, AnswerSheetType.MIDTERM,"");
-    }
-
-    public String uploadEndtermSheet(String studentUsername, String courseName, MultipartFile file) {
-        return uploadAnswerSheet(studentUsername, courseName, file, AnswerSheetType.ENDTERM,"");
-    }
-
-    public String uploadAssignmentSheet(String studentUsername, String courseName, MultipartFile file, String assignmentNumber) {
-        System.out.println("Upload assignemt sheet called");
-        return uploadAnswerSheet(studentUsername, courseName, file, AnswerSheetType.ASSIGNMENT, assignmentNumber);
-    }
-
     @Transactional
     public void deleteMidtermSheet(String studentUsername, String courseName) {
         Student student = studentRepository.findByUsername(studentUsername)
@@ -594,16 +799,17 @@ public class TeacherService {
                 .findFirst()
                 .orElseThrow(() -> new RuntimeException("Enrolment for course not found"));
 
-        // Remove MIDTERM answer scores
-        enrolment.getAnswerScores().removeIf(score -> score.getType() == AnswerSheetType.MIDTERM);
+        if (enrolment.getMidtermAnswerSheetUrl() == null) {
+            throw new BadRequestException("No midterm sheet exists to delete.");
+        }
 
-        // Reset sheet URL and marks
+        enrolment.getAnswerScores().removeIf(score -> score.getType() == AnswerSheetType.MIDTERM);
         enrolment.setMidtermAnswerSheetUrl(null);
+        enrolment.setMidtermAnswerSheetText(null);
         enrolment.setMidtermMarks(0.0);
 
         enrolmentRepository.save(enrolment);
     }
-
 
     @Transactional
     public void deleteEndtermSheet(String studentUsername, String courseName) {
@@ -615,16 +821,17 @@ public class TeacherService {
                 .findFirst()
                 .orElseThrow(() -> new RuntimeException("Enrolment for course not found"));
 
-        // Remove ENDTERM answer scores
-        enrolment.getAnswerScores().removeIf(score -> score.getType() == AnswerSheetType.ENDTERM);
+        if (enrolment.getEndtermAnswerSheetUrl() == null) {
+            throw new BadRequestException("No endterm sheet exists to delete.");
+        }
 
-        // Reset sheet URL and marks
+        enrolment.getAnswerScores().removeIf(score -> score.getType() == AnswerSheetType.ENDTERM);
         enrolment.setEndtermAnswerSheetUrl(null);
+        enrolment.setEndtermAnswerSheetText(null);
         enrolment.setEndtermMarks(0.0);
 
         enrolmentRepository.save(enrolment);
     }
-
 
     @Transactional
     public void deleteAssignmentSheet(String studentUsername, String courseName, String assignmentNumber) {
@@ -636,20 +843,19 @@ public class TeacherService {
                 .findFirst()
                 .orElseThrow(() -> new RuntimeException("Enrolment for course not found"));
 
-        // Find the assignment submission
         AssignmentSubmission assignmentSubmission = enrolment.getAssignments().stream()
                 .filter(a -> assignmentNumber.equals(a.getAssignmentNumber()))
                 .findFirst()
-                .orElseThrow(() -> new RuntimeException("Assignment with number " + assignmentNumber + " not found"));
+                .orElseThrow(() -> new BadRequestException("Assignment with number " + assignmentNumber + " not found"));
 
-        // Remove from enrolment's assignment list
-        enrolment.getAssignments().remove(assignmentSubmission);
+        if (assignmentSubmission.getAnswerSheetUrl() == null) {
+            throw new BadRequestException("No assignment sheet exists to delete.");
+        }
 
-        // (Optional) If not using orphanRemoval, delete explicitly:
-        // assignmentSubmissionRepository.delete(assignmentSubmission);
-
+        enrolment.getAssignments().remove(assignmentSubmission); // Will cascade delete
         enrolmentRepository.save(enrolment);
     }
+
 
     public void assignPaperAsMidterm(Long paperId) {
         QuestionPaper paper = questionPaperRepository.findById(paperId)
@@ -768,6 +974,77 @@ public class TeacherService {
         return appUserRepository.findByUsername(email);
     }
 
+
+    private int extractLastThreeDigits(String roll) {
+        try {
+            Matcher matcher = Pattern.compile("(\\d{3})$").matcher(roll);
+            if (matcher.find()) {
+                return Integer.parseInt(matcher.group(1));
+            }
+        } catch (Exception e) {
+            // Optionally log
+        }
+        return Integer.MAX_VALUE; // Put invalid roll numbers at the end
+    }
+
+
+    private Map<String, String> parseAnswerSheetText(String text) {
+        if (text == null || text.trim().isEmpty()) return Collections.emptyMap();
+
+        // We'll store in insertion order (LinkedHashMap) to keep question order intact
+        Map<String, String> result = new LinkedHashMap<>();
+
+        Pattern answerStartPattern = Pattern.compile("(?i)[^a-zA-Z0-9]*?(ans|ams|axs|ars)[\\s:!.-]*(\\d+)\\s*(.*)?");
+
+
+        String currentKey = null;
+        StringBuilder currentAnswer = new StringBuilder();
+
+        String[] lines = text.split("\\r?\\n");
+
+        for (String line : lines) {
+            line = line.trim();
+            if (line.isEmpty()) continue;
+
+            Matcher matcher = answerStartPattern.matcher(line);
+            if (matcher.matches()) {
+                // Save previous answer
+                if (currentKey != null && currentAnswer.length() > 0) {
+                    result.put(currentKey, currentAnswer.toString().trim());
+                    currentAnswer.setLength(0);
+                }
+
+                // Start new answer
+                String number = matcher.group(2);
+                currentKey = "Ans" + number;
+
+                String inlineAnswer = matcher.group(3);
+                if (inlineAnswer != null && !inlineAnswer.isBlank()) {
+                    currentAnswer.append(inlineAnswer.trim()).append(" ");
+                }
+
+            } else {
+                if (currentKey != null) {
+                    currentAnswer.append(line).append(" ");
+                }
+            }
+        }
+
+        // Save the final answer
+        if (currentKey != null && currentAnswer.length() > 0) {
+            result.put(currentKey, currentAnswer.toString().trim());
+        }
+
+        // Sort by numeric suffix of the key (e.g., "Ans1", "Ans2", ...)
+        return result.entrySet().stream()
+                .sorted(Comparator.comparingInt(e -> Integer.parseInt(e.getKey().substring(3))))
+                .collect(Collectors.toMap(
+                        Map.Entry::getKey,
+                        Map.Entry::getValue,
+                        (oldVal, newVal) -> oldVal,
+                        LinkedHashMap::new
+                ));
+    }
 
 
 }

@@ -343,11 +343,6 @@ public class AdminController extends BaseRestController {
 
 
 
-    private String generateRandomPassword() {
-        // Simple random password generator (can improve)
-        return UUID.randomUUID().toString().substring(0, 8);
-    }
-
 
 
 

@@ -47,18 +47,9 @@ public class AdminService {
         this.appUserRepository = appUserRepository;
         this.emailService = emailService;
         this.superAdminRepository = superAdminRepository;
-       // this.superAdminRepository = superAdminRepository;
+
     }
-//When you save a Student object (which extends AppUser and you are using @Inheritance(strategy = JOINED)):
-//
-//🔵 Data is split and inserted into two tables:
-//
-//
-//Table	What gets saved there
-//appuser	All fields from the AppUser class (id, username, password, role, createdAt).
-//student	Only the fields specific to the Student class (rollNo, name, semester, department).
-//Both will use the same id —
-//the id in student table will be a foreign key pointing to appuser.id.
+
 @Transactional
 public void addStudent(StudentDTO studentDTO) {
     String username = studentDTO.getUsername();

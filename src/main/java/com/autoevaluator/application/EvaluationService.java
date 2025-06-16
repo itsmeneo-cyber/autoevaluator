@@ -1,5 +1,6 @@
 package com.autoevaluator.application;
 
+import com.autoevaluator.adapter.handler.rest.ErrorResponse;
 import com.autoevaluator.domain.dto.AnswerScoreDto;
 import com.autoevaluator.domain.dto.CompareAnswersRequest;
 import com.autoevaluator.domain.dto.CompareAnswersResponse;
@@ -14,7 +15,10 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.*;
@@ -34,11 +38,122 @@ public class EvaluationService {
 
     @Value("${spring.scoring.api-url}")
     private String scoringApiUrl;
+    @Autowired
+    private SimpMessagingTemplate messagingTemplate;
+
+    @Async("externalTaskExecutor")
+    @Transactional
+    public void evaluateMidtermAsync(String studentUsername, String courseName, String teacherUsername) {
+        try {
+            Student student = studentRepository.findByUsername(studentUsername)
+                    .orElseThrow(() -> new RuntimeException("Student not found"));
+            List<EvaluationResponseDto> result = evaluateMidterm(student, courseName);
+            double total = result.stream().mapToDouble(EvaluationResponseDto::getMarksObtained).sum();
 
 
-    public List<EvaluationResponseDto> evaluateMidterm(String studentUsername, String courseName) {
-        Student student = studentRepository.findByUsername(studentUsername)
-                .orElseThrow(() -> new RuntimeException("Student not found"));
+
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("type", "MIDTERM_EVALUATION_SUCCESS");
+            payload.put("message", "✅ Midterm evaluated. You can now view the answer sheet.");
+            payload.put("studentUsername", studentUsername);
+            payload.put("courseName", courseName);
+            payload.put("totalMarks", total);
+            payload.put("collegeName", student.getCollege().getName());
+            payload.put("departmentName", student.getDepartment().getName());
+            payload.put("semester", student.getSemester());
+
+
+
+            notifyStructuredClient(teacherUsername, payload);
+
+        } catch (Exception e) {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("type", "MIDTERM_EVALUATION_FAILURE");
+            payload.put("message", " Midterm evaluation failed: " + e.getMessage());
+            payload.put("studentUsername", studentUsername);
+            payload.put("courseName", courseName);
+            notifyStructuredClient(teacherUsername, payload);
+        }
+    }
+    @Async("externalTaskExecutor")
+    @Transactional
+    public void evaluateEndtermAsync(String studentUsername, String courseName, String teacherUsername) {
+        try {
+            Student student = studentRepository.findByUsername(studentUsername)
+                    .orElseThrow(() -> new RuntimeException("Student not found"));
+            List<EvaluationResponseDto> result = evaluateEndterm(student, courseName);
+            double total = result.stream().mapToDouble(EvaluationResponseDto::getMarksObtained).sum();
+
+
+
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("type", "ENDTERM_EVALUATION_SUCCESS");
+            payload.put("message", "✅ Endterm evaluated. You can now view the answer sheet.");
+            payload.put("studentUsername", studentUsername);
+            payload.put("courseName", courseName);
+            payload.put("totalMarks", total);
+            payload.put("collegeName", student.getCollege().getName());
+            payload.put("departmentName", student.getDepartment().getName());
+            payload.put("semester", student.getSemester());
+
+            notifyStructuredClient(teacherUsername, payload);
+
+        } catch (Exception e) {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("type", "ENDTERM_EVALUATION_FAILURE");
+            payload.put("message", " Endterm evaluation failed: " + e.getMessage());
+            payload.put("studentUsername", studentUsername);
+            payload.put("courseName", courseName);
+            notifyStructuredClient(teacherUsername, payload);
+        }
+    }
+    @Async("externalTaskExecutor")
+    @Transactional
+    public void evaluateAssignmentAsync(String studentUsername, String courseName, int assignmentNo, String teacherUsername) {
+        try {
+            Student student = studentRepository.findByUsername(studentUsername)
+                    .orElseThrow(() -> new RuntimeException("Student not found"));
+
+            Double score = evaluateAssignment(student, courseName, assignmentNo);
+
+
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("type", "ASSIGNMENT_EVALUATION_SUCCESS");
+            payload.put("message", "✅ Assignment evaluated. You can now view the answer sheet.");
+            payload.put("studentUsername", studentUsername);
+            payload.put("courseName", courseName);
+            payload.put("assignmentNumber", assignmentNo);
+            payload.put("marks", score);
+            payload.put("collegeName", student.getCollege().getName());
+            payload.put("departmentName", student.getDepartment().getName());
+            payload.put("semester", student.getSemester());
+
+            notifyStructuredClient(teacherUsername, payload);
+
+        } catch (Exception e) {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("type", "ASSIGNMENT_EVALUATION_FAILURE");
+            payload.put("message", " Assignment evaluation failed: " + e.getMessage());
+            payload.put("studentUsername", studentUsername);
+            payload.put("courseName", courseName);
+            payload.put("assignmentNumber", assignmentNo);
+            notifyStructuredClient(teacherUsername, payload);
+        }
+    }
+
+    private void notifyStructuredClient(String teacherUsername, Map<String, Object> payload) {
+        try {
+            System.out.println("🔍 Current Thread: " + Thread.currentThread().getName());
+            Thread.sleep(15000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            System.out.println("Delay interrupted: " + e.getMessage());
+        }
+        messagingTemplate.convertAndSend("/topic/evaluations/" + teacherUsername, payload);
+    }
+
+    public List<EvaluationResponseDto> evaluateMidterm(Student student, String courseName) {
+
 
         Course course = courseRepository.findByCourseName(courseName)
                 .orElseThrow(() -> new RuntimeException("Course not found"));
@@ -62,9 +177,7 @@ public class EvaluationService {
         return dtos;
     }
 
-    public List<EvaluationResponseDto> evaluateEndterm(String studentUsername, String courseName) {
-        Student student = studentRepository.findByUsername(studentUsername)
-                .orElseThrow(() -> new RuntimeException("Student not found"));
+    public List<EvaluationResponseDto> evaluateEndterm(Student student, String courseName) {
 
         Course course = courseRepository.findByCourseName(courseName)
                 .orElseThrow(() -> new RuntimeException("Course not found"));
@@ -87,9 +200,17 @@ public class EvaluationService {
 
         return dtos;
     }
-    public Double evaluateAssignment(String studentUsername, String courseName, int assignmentNo) {
-        Student student = studentRepository.findByUsername(studentUsername)
-                .orElseThrow(() -> new RuntimeException("Student not found"));
+    public Double evaluateAssignment(Student student, String courseName, int assignmentNo) {
+        // ✅ Check if assignment question paper exists
+        boolean exists = questionPaperRepository
+                .findByCourse_CourseNameAndIsAssignmentTrueAndAssignmentNumber(courseName, assignmentNo)
+                .isPresent();
+
+        if (!exists) {
+            throw new BadRequestException("Assignment not created yet , upload rejected");
+
+        }
+
 
         Course course = courseRepository.findByCourseName(courseName)
                 .orElseThrow(() -> new RuntimeException("Course not found"));
@@ -107,7 +228,8 @@ public class EvaluationService {
                 .orElseThrow(() -> new RuntimeException("Assignment submission not found"));
 
         String answerText = assignmentSubmission.getAssignmentSheetText();
-
+        System.out.println("Reached here ");
+        System.out.println(answerText);
         // Use questionPaperRepository to fetch the assignment paper
         QuestionPaper paper = questionPaperRepository
                 .findByCourse_CourseNameAndIsAssignmentTrueAndAssignmentNumber(courseName, assignmentNo)
@@ -148,7 +270,10 @@ public class EvaluationService {
             String correctAnswer = question.getAnswerKey() != null ? question.getAnswerKey().getCorrectAnswer() : "";
             int questionMarks = question.getMarks().intValue();
 
-            Double obtainedMarks = simulateScoringApiCall(correctAnswer, studentAnswer, questionMarks);
+            Double obtainedMarks = callScoringApi(correctAnswer, studentAnswer, questionMarks);
+
+
+
 
             AnswerScore answerScore = AnswerScore.builder()
                     .answerLabel(qNo)
@@ -187,7 +312,8 @@ public class EvaluationService {
         // We'll store in insertion order (LinkedHashMap) to keep question order intact
         Map<String, String> result = new LinkedHashMap<>();
 
-        Pattern answerStartPattern = Pattern.compile("(?i)[^a-zA-Z0-9]*?(ans|ams|axs|ars)\\s*(\\d+)\\s*(.*)?");
+        Pattern answerStartPattern = Pattern.compile("(?i)[^a-zA-Z0-9]*?(ans|ams|axs|ars)[\\s:!.-]*(\\d+)\\s*(.*)?");
+
 
         String currentKey = null;
         StringBuilder currentAnswer = new StringBuilder();
@@ -317,7 +443,7 @@ public class EvaluationService {
                 .toList();
     }
 
-    private Double simulateScoringApiCall(String correctAnswer, String studentAnswer, int questionMarks) {
+    private Double callScoringApi(String correctAnswer, String studentAnswer, int questionMarks) {
         if (studentAnswer == null || studentAnswer.trim().isEmpty()) {
             return 0.0;
         }
@@ -351,5 +477,60 @@ public class EvaluationService {
 
         return body.getScore();
     }
+
+
+
+    public List<AnswerScoreDto> viewMidtermRawAnswers(String studentUsername, String courseName) {
+        Student student = studentRepository.findByUsername(studentUsername)
+                .orElseThrow(() -> new RuntimeException("Student not found"));
+
+        Enrolment enrolment = student.getEnrolments().stream()
+                .filter(e -> e.getCourse().getCourseName().equals(courseName))
+                .findFirst()
+                .orElseThrow(() -> new RuntimeException("Enrolment for course not found"));
+        return parseRawAnswers(enrolment.getMidtermAnswerSheetText(), AnswerSheetType.MIDTERM);
+    }
+
+    public List<AnswerScoreDto> viewEndtermRawAnswers(String studentUsername, String courseName) {
+        Student student = studentRepository.findByUsername(studentUsername)
+                .orElseThrow(() -> new RuntimeException("Student not found"));
+
+        Enrolment enrolment = student.getEnrolments().stream()
+                .filter(e -> e.getCourse().getCourseName().equals(courseName))
+                .findFirst()
+                .orElseThrow(() -> new RuntimeException("Enrolment for course not found"));
+        return parseRawAnswers(enrolment.getEndtermAnswerSheetText(), AnswerSheetType.ENDTERM);
+    }
+
+    public List<AnswerScoreDto> viewAssignmentRawAnswers(String studentUsername, String courseName, int assignmentNo) {
+        Student student = studentRepository.findByUsername(studentUsername)
+                .orElseThrow(() -> new RuntimeException("Student not found"));
+
+        Enrolment enrolment = student.getEnrolments().stream()
+                .filter(e -> e.getCourse().getCourseName().equals(courseName))
+                .findFirst()
+                .orElseThrow(() -> new RuntimeException("Enrolment for course not found"));
+        AssignmentSubmission submission = enrolment.getAssignments().stream()
+                .filter(a -> a.getAssignmentNumber().equals(String.valueOf(assignmentNo)))
+                .findFirst()
+                .orElseThrow(() -> new RuntimeException("Assignment not found"));
+        return parseRawAnswers(submission.getAssignmentSheetText(), AnswerSheetType.ASSIGNMENT);
+    }
+
+    private List<AnswerScoreDto> parseRawAnswers(String rawText, AnswerSheetType type) {
+        if (rawText == null || rawText.isBlank()) return List.of();
+
+        Map<String, String> answerMap = parseAnswerSheetText(rawText); // same method from earlier
+        return answerMap.entrySet().stream()
+                .map(entry -> AnswerScoreDto.builder()
+                        .answerLabel(entry.getKey())
+                        .answerText(entry.getValue())
+                        .obtainedMarks(null)
+                        .totalMarks(null)
+                        .type(type)
+                        .build())
+                .toList();
+    }
+
 
 }

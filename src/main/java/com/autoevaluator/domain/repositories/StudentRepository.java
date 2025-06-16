@@ -61,5 +61,11 @@ public interface StudentRepository extends JpaRepository<Student, Long> {
     );
 
     List<Student> findTop10ByUsernameContainingIgnoreCase(String email);
+    Optional<Student> findByUsernameAndCollegeAndDepartmentAndSemester(
+            String username,
+            College college,
+            Department department,
+            int semester
+    );
 
 }

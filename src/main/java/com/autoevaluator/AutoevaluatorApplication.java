@@ -20,6 +20,7 @@ public class AutoevaluatorApplication {
 		setIfAbsent("MAIL_USER", dotenv.get("MAIL_USER", ""));
 		setIfAbsent("MAIL_PASS", dotenv.get("MAIL_PASS", ""));
 		setIfAbsent("OCR_URL", dotenv.get("OCR_URL", "http://localhost:8000"));
+		setIfAbsent("SCORING_API", dotenv.get("SCORING_API", "https://groq-zotl.onrender.com/compare_answers"));
 
 		SpringApplication.run(AutoevaluatorApplication.class, args);
 	}

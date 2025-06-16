@@ -49,5 +49,8 @@ public class QuestionPaperResponse {
     @Parameter(description = "course code")
     private String courseCode;
 
+    @Parameter(description = "marks set so far")
+    private Double marksSoFar;
+
 
 }

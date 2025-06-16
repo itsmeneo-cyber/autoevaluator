@@ -151,21 +151,6 @@ public class CollegeController extends BaseRestController {
 
 
 
-
-
-
-
-
-
-
-    // Endpoint to add a course to a department
-
-
-
-
-
-    // In CollegeController.java
-
     @PostMapping(value = "/addCourseToDepartment/{collegeName}/{departmentName}", consumes = MediaType.APPLICATION_JSON_VALUE)
     @Operation(summary = "Add a Course to a Department",
             description = "Creates a new Course and associates it with an existing Department in a specific College. Only accessible by users with ADMIN role.")
@@ -218,20 +203,7 @@ public class CollegeController extends BaseRestController {
             @RequestParam String collegeName,
             @RequestParam String departmentName,
             @RequestParam String courseName) {
-        collegeService.deleteCourseFromDepartment(collegeName, departmentName, courseName);
-        return ResponseEntity.ok("Course deleted successfully.");
-    }
-
-
-
-
-
-
-
-
-
-
-
-
-
+    collegeService.deleteCourseFromDepartment(collegeName, departmentName, courseName);
+    return ResponseEntity.ok("Course deleted successfully.");
+}
 }

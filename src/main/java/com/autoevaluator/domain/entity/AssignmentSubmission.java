@@ -24,7 +24,7 @@ public class AssignmentSubmission {
     @Column(columnDefinition = "TEXT")
     private String assignmentSheetText;  // updated from @Lob to TEXT
 
-    private Double marks;
+    private Double marks;//total marks of the assignemnt u could say
 
     @ManyToOne
     @JoinColumn(name = "enrolment_id", nullable = false)

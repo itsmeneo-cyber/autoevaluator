@@ -9,6 +9,8 @@ import lombok.Data;
 @AllArgsConstructor
 @Builder
 public class AnswerScoreDto {
+    private String rollno;
+    private String name;
     private String answerLabel;
     private Double obtainedMarks;
     private Integer totalMarks;

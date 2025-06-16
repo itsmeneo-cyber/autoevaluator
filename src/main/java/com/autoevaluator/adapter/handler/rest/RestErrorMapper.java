@@ -9,6 +9,7 @@ import java.util.Locale;
 public class RestErrorMapper {
 
     public static ErrorResponse fromInvalidRoleException(InvalidRoleException ex, Locale locale) {
+
         return new ErrorResponse(HttpStatus.FORBIDDEN.value(), ex.getMessage());
     }
 

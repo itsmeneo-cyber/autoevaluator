@@ -7,35 +7,27 @@ import com.autoevaluator.domain.dto.*;
 import com.autoevaluator.domain.entity.AppUser;
 import com.autoevaluator.domain.models.UserPrincipal;
 import com.autoevaluator.domain.repositories.AppUserRepository;
-import com.itextpdf.kernel.colors.DeviceGray;
-import com.itextpdf.kernel.pdf.canvas.draw.DashedLine;
-import com.itextpdf.layout.borders.DashedBorder;
+import com.autoevaluator.domain.repositories.QuestionPaperRepository;
+import com.autoevaluator.util.InMemoryMultipartFile;
+import com.autoevaluator.util.TaskRateLimiter;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
+import org.springframework.http.*;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 
-import com.itextpdf.kernel.pdf.PdfDocument;
-import com.itextpdf.kernel.pdf.PdfWriter;
-import com.itextpdf.layout.Document;
-import com.itextpdf.layout.element.Paragraph;
-import com.itextpdf.layout.element.LineSeparator;
-import com.itextpdf.layout.element.Image;
-import com.itextpdf.io.image.ImageDataFactory;
 
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 
-import java.io.ByteArrayOutputStream;
-import java.io.File;
 
+
+import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -50,9 +42,14 @@ public class TeacherController extends BaseRestController {
 
     private final AppUserRepository appUserRepository;
 
-    public TeacherController(TeacherService teacherService, AppUserRepository appUserRepository) {
+    private final QuestionPaperRepository questionPaperRepository;
+
+    private final TaskRateLimiter taskRateLimiter;
+    public TeacherController(TeacherService teacherService, AppUserRepository appUserRepository, TaskRateLimiter taskRateLimiter, QuestionPaperRepository questionPaperRepository) {
         this.teacherService = teacherService;
         this.appUserRepository = appUserRepository;
+        this.taskRateLimiter = taskRateLimiter;
+        this.questionPaperRepository = questionPaperRepository;
     }
 
 
@@ -94,19 +91,11 @@ public class TeacherController extends BaseRestController {
     public ResponseEntity<?> addQuestionToPaper(@PathVariable("paperId") Long paperId,
                                                 @RequestBody QuestionRequest questionDTO) {
 
-        // ✅ Print incoming request details
-        System.out.println("Received request to add question to paper ID: " + paperId);
-        System.out.println("QuestionRequest Payload:");
-        System.out.println("  Question Number: " + questionDTO.getQuestionNumber());
-        System.out.println("  Text: " + questionDTO.getText());
-        System.out.println("  Marks: " + questionDTO.getMarks());
-        System.out.println("  Instructions: " + questionDTO.getInstructions());
-        System.out.println("  Correct Answer: " + questionDTO.getCorrectAnswer());
 
-        // Call the service method to add the question to the paper
+
+
         teacherService.addQuestionToPaper(paperId, questionDTO);
 
-        // Return a simple success message
         return ResponseEntity.ok().body(Map.of(
                 "message", "Question added successfully."
         ));
@@ -183,6 +172,19 @@ public class TeacherController extends BaseRestController {
         return ResponseEntity.ok(questionPapers);
     }
 
+    @GetMapping("/studentDashboard/single")
+    public ResponseEntity<StudentResponse> getStudentDashboardInfoByUsername(
+            @RequestParam String collegeName,
+            @RequestParam String departmentName,
+            @RequestParam int semester,
+            @RequestParam String courseName,
+            @RequestParam String studentUsername
+    ) {
+        StudentResponse response = teacherService.getStudentDashboardInfoByUsername(
+                collegeName, departmentName, semester, courseName, studentUsername
+        );
+        return ResponseEntity.ok(response);
+    }
 
 
     @GetMapping("/getStudentPanel")
@@ -199,54 +201,181 @@ public class TeacherController extends BaseRestController {
             @RequestParam int semester,
             @RequestParam String courseName) {
 
-        // Get student dashboard data from service
+
         List<StudentResponse> dashboard = teacherService.getStudentDashboardInfo(collegeName,departmentName, semester, courseName);
 
         return ResponseEntity.ok(dashboard);
-    }
-
-    @PostMapping("/uploadMidtermAnswerSheet")
+    }@PostMapping("/uploadMidtermAnswerSheet")
     public ResponseEntity<?> uploadMidtermAnswerSheet(
             @RequestParam String studentUsername,
             @RequestParam String courseName,
-            @RequestParam("file") MultipartFile file) {
+            @RequestParam("files") List<MultipartFile> files) {
 
-        String uploadedUrl = teacherService.uploadMidtermSheet(studentUsername, courseName, file);
 
-        return ResponseEntity.ok(Map.of(
-                "message", "Midterm answer sheet uploaded successfully",
-                "url", uploadedUrl
-        ));
+        boolean exists = questionPaperRepository
+                .findByCourse_CourseNameAndIsMidtermTrue(courseName)
+                .isPresent();
+
+        if (!exists) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(new ErrorResponse(HttpStatus.BAD_REQUEST.value(),
+                            "❌ Midterm question paper not created yet, upload rejected"));
+        }
+
+
+        if (!taskRateLimiter.canExecute(studentUsername, courseName, "UPLOAD_MIDTERM", null)) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .body(new ErrorResponse(HttpStatus.TOO_MANY_REQUESTS.value(),
+                            "🕒 Please wait at least 1 minute before re-uploading midterm for this student."));
+        }
+
+
+        for (MultipartFile file : files) {
+            String contentType = file.getContentType();
+            if (contentType == null || !contentType.startsWith("image/")) {
+                return ResponseEntity.badRequest()
+                        .body(new ErrorResponse(HttpStatus.BAD_REQUEST.value(),
+                                "❌ Only image files (JPG, PNG) are allowed. PDFs are not supported in this upload."));
+            }
+        }
+
+        try {
+
+            List<MultipartFile> inMemoryFiles = new ArrayList<>();
+            for (MultipartFile file : files) {
+                inMemoryFiles.add(new InMemoryMultipartFile(
+                        file.getBytes(),
+                        file.getOriginalFilename(),
+                        file.getContentType()
+                ));
+            }
+
+            String teacherUsername = getCurrentUser().getUsername();
+
+
+            teacherService.uploadMidtermSheetAsync(studentUsername, courseName, inMemoryFiles, teacherUsername);
+            taskRateLimiter.recordExecution(studentUsername, courseName, "UPLOAD_MIDTERM", null);
+
+            return ResponseEntity.accepted().body(Map.of(
+                    "message", "✅ Midterm image answer sheets received. Processing started — you will be notified once complete."
+            ));
+        } catch (IOException e) {
+            return ResponseEntity.internalServerError().body(Map.of(
+                    "error", "Failed to read uploaded files"
+            ));
+        }
     }
 
     @PostMapping("/uploadEndtermAnswerSheet")
     public ResponseEntity<?> uploadEndtermAnswerSheet(
             @RequestParam String studentUsername,
             @RequestParam String courseName,
-            @RequestParam("file") MultipartFile file) {
+            @RequestParam("files") List<MultipartFile> files) {
 
-        String uploadedUrl = teacherService.uploadEndtermSheet(studentUsername, courseName, file);
 
-        return ResponseEntity.ok(Map.of(
-                "message", "Endterm answer sheet uploaded successfully",
-                "url", uploadedUrl
-        ));
+        boolean exists = questionPaperRepository
+                .findByCourse_CourseNameAndIsEndtermTrue(courseName)
+                .isPresent();
+
+        if (!exists) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(new ErrorResponse(HttpStatus.BAD_REQUEST.value(),
+                            "❌ Endterm question paper not created yet, upload rejected"));
+        }
+
+        if (!taskRateLimiter.canExecute(studentUsername, courseName, "UPLOAD_ENDTERM", null)) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .body(new ErrorResponse(HttpStatus.TOO_MANY_REQUESTS.value(),
+                            "🕒 Please wait at least 1 minute before re-uploading endterm for this student."));
+        }
+
+        try {
+            String teacherUsername = getCurrentUser().getUsername();
+
+
+            for (MultipartFile file : files) {
+                String contentType = file.getContentType();
+                if (contentType == null || !contentType.startsWith("image/")) {
+                    return ResponseEntity.badRequest()
+                            .body(new ErrorResponse(HttpStatus.BAD_REQUEST.value(),
+                                    "❌ All uploaded files must be images (JPG/PNG)."));
+                }
+            }
+
+            teacherService.uploadEndtermSheetAsync(studentUsername, courseName, files, teacherUsername);
+            taskRateLimiter.recordExecution(studentUsername, courseName, "UPLOAD_ENDTERM", null);
+
+            return ResponseEntity.accepted().body(Map.of(
+                    "message", "✅ Endterm answer sheets received. Processing started — you will be notified once complete."
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of(
+                    "error", "Failed to process uploaded files"
+            ));
+        }
     }
 
     @PostMapping("/uploadAssignmentAnswerSheet")
     public ResponseEntity<?> uploadAssignmentAnswerSheet(
             @RequestParam String studentUsername,
             @RequestParam String courseName,
-            @RequestParam("file") MultipartFile file,
-            @RequestParam(required = false) String assignmentNumber) {
+            @RequestParam("files") List<MultipartFile> files,
+            @RequestParam String assignmentNumber) {
 
-        String uploadedUrl = teacherService.uploadAssignmentSheet(studentUsername, courseName, file, assignmentNumber);
+        Integer assignmentNum;
+        try {
+            assignmentNum = Integer.parseInt(assignmentNumber);
+        } catch (NumberFormatException e) {
+            return ResponseEntity.badRequest().body(
+                    new ErrorResponse(HttpStatus.BAD_REQUEST.value(),
+                            "❌ Invalid assignment number. Upload rejected"));
+        }
 
-        return ResponseEntity.ok(Map.of(
-                "message", "Assignment answer sheet uploaded successfully",
-                "url", uploadedUrl
-        ));
+
+        boolean exists = questionPaperRepository
+                .findByCourse_CourseNameAndIsAssignmentTrueAndAssignmentNumber(courseName, assignmentNum)
+                .isPresent();
+
+        if (!exists) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(new ErrorResponse(HttpStatus.BAD_REQUEST.value(),
+                            "❌ Assignment not created yet, upload rejected"));
+        }
+
+
+        if (!taskRateLimiter.canExecute(studentUsername, courseName, "UPLOAD_ASSIGNMENT", assignmentNumber)) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .body(new ErrorResponse(HttpStatus.TOO_MANY_REQUESTS.value(),
+                            "🕒 Please wait at least 1 minute before re-uploading assignment for this student."));
+        }
+
+        try {
+
+            for (MultipartFile file : files) {
+                String contentType = file.getContentType();
+                if (contentType == null || !contentType.startsWith("image/")) {
+                    return ResponseEntity.badRequest().body(
+                            new ErrorResponse(HttpStatus.BAD_REQUEST.value(),
+                                    "❌ All uploaded files must be images (JPG/PNG)."));
+                }
+            }
+
+            String teacherUsername = getCurrentUser().getUsername();
+            teacherService.uploadAssignmentSheetAsync(
+                    studentUsername, courseName, files, assignmentNumber, teacherUsername);
+
+            taskRateLimiter.recordExecution(studentUsername, courseName, "UPLOAD_ASSIGNMENT", assignmentNumber);
+
+            return ResponseEntity.accepted().body(Map.of(
+                    "message", "✅ Assignment answer sheets received. Processing started — you will be notified once complete."
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of(
+                    "error", "Failed to read uploaded files"
+            ));
+        }
     }
+
 
     @PostMapping("/deleteMidtermAnswerSheet")
     public ResponseEntity<?> deleteMidtermAnswerSheet(
@@ -292,10 +421,21 @@ public class TeacherController extends BaseRestController {
             QuestionPaperResponse paper = teacherService.getQuestionPaperById(id);
 
             List<String> questionsText = paper.getQuestions().stream()
-                    .map(q -> q.getQuestionText() + " (Marks: " + q.getMarks() + ")")
+                    .map(q -> {
+                        StringBuilder sb = new StringBuilder();
+                        sb.append(q.getQuestionText())
+                                .append(" (Marks: ").append(q.getMarks()).append(")");
+
+                        if (q.getInstructions() != null && !q.getInstructions().isBlank()) {
+                            sb.append(" - Instructions: ").append(q.getInstructions());
+                        }
+
+                        return sb.toString();
+                    })
                     .collect(Collectors.toList());
 
-            // Pass exam date/time if your PDF generator uses it
+
+
             byte[] pdfBytes = QuestionPaperPdfGenerator.generateQuestionPaper(
                     paper.getCollegeName(),
                     "src/main/resources/static/logo.jpg",
@@ -305,12 +445,12 @@ public class TeacherController extends BaseRestController {
                     paper.getSemester(),
                     paper.getType(),
                     questionsText,
-                    examInfo.getExamDate(),     // new param
-                    examInfo.getExamTime()      // new param
+                    examInfo.getExamDate(),
+                    examInfo.getExamTime()
             );
 
             HttpHeaders headers = new HttpHeaders();
-            headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=QuestionPaper_" + id + ".pdf");
+            headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=QuestionPaper_" + paper.getType() + id  + ".pdf");
 
             return ResponseEntity.ok()
                     .headers(headers)
@@ -324,35 +464,6 @@ public class TeacherController extends BaseRestController {
     }
 
 
-//
-//    /**
-//     * Check if a teacher is assigned to a specific department and course in a given semester.
-//     *
-//     * @param username       The username of the teacher (typically their login/email ID).
-//     * @param departmentName The name of the department to check assignment against.
-//     * @param courseName     The name of the course the teacher should be assigned to.
-//     * @param semester       The semester number of the course.
-//     * @return ResponseEntity containing true if the teacher is assigned, false otherwise.
-//     */
-//    @Operation(
-//            summary = "Check if a teacher is assigned to a department and course in a given semester",
-//            description = "Returns true if the teacher with the given username is assigned to the specified department and course for the given semester."
-//    )
-//    @ApiResponses(value = {
-//            @ApiResponse(responseCode = "200", description = "Successfully verified teacher assignment"),
-//            @ApiResponse(responseCode = "404", description = "Teacher not found"),
-//            @ApiResponse(responseCode = "400", description = "Invalid input parameters")
-//    })
-//    @GetMapping("/teacher/assigned")
-//    public ResponseEntity<Boolean> isTeacherAssigned(
-//            @RequestParam String username,
-//            @RequestParam String departmentName,
-//            @RequestParam String courseName,
-//            @RequestParam int semester
-//    ) {
-//        boolean assigned = teacherService.isTeacherAssigned(username, departmentName, courseName, semester);
-//        return ResponseEntity.ok(assigned);
-//    }
 
     @GetMapping("/shareList")
     @Operation(summary = "Get all teachers except the one with given username")

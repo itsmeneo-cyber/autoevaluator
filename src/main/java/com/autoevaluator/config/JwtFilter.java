@@ -1,42 +1,5 @@
 package com.autoevaluator.config;
-//
-//import com.autoevaluator.application.JwtService;
-//import jakarta.servlet.FilterChain;
-//import jakarta.servlet.ServletException;
-//import jakarta.servlet.http.HttpServletRequest;
-//import jakarta.servlet.http.HttpServletResponse;
-//import org.springframework.beans.factory.annotation.Autowired;
-//import org.springframework.security.core.context.SecurityContext;
-//import org.springframework.security.core.context.SecurityContextHolder;
-//import org.springframework.stereotype.Component;
-//import org.springframework.web.filter.OncePerRequestFilter;
-//
-//import java.io.IOException;
-//
-//@Component
-//public class JwtFilter extends OncePerRequestFilter {
-//    @Autowired
-//    JwtService jwtService;
-//    @Override
-//    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain) throws ServletException, IOException {
-//        String authHeader = request.getHeader("Authorization");
-//
-//        String token = null;
-//        String username = null;
-//
-//        if (authHeader!=null && authHeader.startsWith("Bearer ")) {
-//            token = authHeader.substring(7);
-//            username = jwtService.extractUserName(token);
-//        }
-//        if (username != null && SecurityContextHolder.getContext().getAuthentication()== null)
-//        {
-//            //IF you dont have the authentication object then only do the authentication otherwise no need to do
-//            //So u willl have to give a authentication object to the spring security
-//            if(jwtService.validateToken(token,userDetails))
-//        }
-//    }
-//    //If we want to filter to be there for evey request we will have to use oncePerFilterRequest
-//}
+
 import com.autoevaluator.application.JwtService;
 import com.autoevaluator.application.MyUserDetailsService;
 import jakarta.servlet.FilterChain;
@@ -69,7 +32,8 @@ public class JwtFilter extends OncePerRequestFilter {
         if (path.equals("/api/admin/get-in-touch")
                 || path.startsWith("/swagger-ui")
                 || path.startsWith("/v3/api-docs")
-                || path.startsWith("/api/admin/send-password")) {
+                || path.startsWith("/api/admin/send-password")
+        || path.startsWith("/ws")) {
             filterChain.doFilter(request, response);
             return; // Important: skip the rest of the filter
         }
