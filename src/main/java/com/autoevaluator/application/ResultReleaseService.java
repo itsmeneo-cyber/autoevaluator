@@ -59,6 +59,9 @@ public class ResultReleaseService {
 
         List<Enrolment> enrolments = enrolmentRepository.findByCourse(course);
 
+        // ✅ Sort enrolments by numeric part of roll number
+        enrolments.sort(Comparator.comparingInt(e -> extractNumericPart(e.getStudent().getRollNo())));
+
         response.setContentType("text/csv");
         response.setHeader("Content-Disposition", "attachment; filename=result.csv");
 
@@ -139,5 +142,11 @@ public class ResultReleaseService {
 
         writer.flush();
     }
+    private int extractNumericPart(String rollNo) {
+        // Extract the last 3 characters and parse as int (e.g., "007" → 7)
+        String numeric = rollNo.substring(rollNo.length() - 3);
+        return Integer.parseInt(numeric);
+    }
+
 
 }

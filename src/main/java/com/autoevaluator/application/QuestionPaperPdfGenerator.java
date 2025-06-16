@@ -53,12 +53,7 @@ public class QuestionPaperPdfGenerator {
                 .setVerticalAlignment(VerticalAlignment.MIDDLE)
                 .setPadding(0);
 
-        if (logoPath != null && !logoPath.isEmpty()) {
-            Image logo = new Image(ImageDataFactory.create(logoPath));
-            logo.setHeight(150);
-            logo.setAutoScale(true);
-            rightCell.add(logo);
-        }
+
         headerTable.addCell(rightCell);
 
         document.add(headerTable);

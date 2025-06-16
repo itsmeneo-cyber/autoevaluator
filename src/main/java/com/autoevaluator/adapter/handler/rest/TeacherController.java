@@ -438,7 +438,7 @@ public class TeacherController extends BaseRestController {
 
             byte[] pdfBytes = QuestionPaperPdfGenerator.generateQuestionPaper(
                     paper.getCollegeName(),
-                    "src/main/resources/static/logo.jpg",
+                    "",
                     paper.getCourseName(),
                     paper.getCourseCode(),
                     paper.getDepartmentName(),

@@ -275,7 +275,7 @@ public class AdminController extends BaseRestController {
         }
     }
 
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPERADMIN')")
     @PostMapping("/deleteDepartment/{collegeName}/{departmentName}")
     @Operation(summary = "Delete a Department from a College",
             description = "Deletes a Department by department and college name.")
