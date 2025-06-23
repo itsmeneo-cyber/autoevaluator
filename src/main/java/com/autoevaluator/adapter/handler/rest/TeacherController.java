@@ -4,7 +4,9 @@ import com.autoevaluator.application.QuestionPaperPdfGenerator;
 import com.autoevaluator.application.TeacherService;
 
 import com.autoevaluator.domain.dto.*;
+import com.autoevaluator.domain.entity.AnswerSheetType;
 import com.autoevaluator.domain.entity.AppUser;
+import com.autoevaluator.domain.entity.QuestionPaper;
 import com.autoevaluator.domain.models.UserPrincipal;
 import com.autoevaluator.domain.repositories.AppUserRepository;
 import com.autoevaluator.domain.repositories.QuestionPaperRepository;
@@ -14,6 +16,9 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import org.springframework.http.*;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
@@ -30,6 +35,8 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -493,6 +500,66 @@ public class TeacherController extends BaseRestController {
         teacherService.assignPaperAsEndterm(paperId);
         return ResponseEntity.ok(Map.of("message", "Paper assigned as Endterm successfully"));
     }
+
+
+
+    @PostMapping(value = "/uploadBulkAnswerSheets", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> uploadBulkAnswerSheets(
+            @RequestParam("file") MultipartFile zipFile,
+            @RequestParam("courseName") String courseName,
+            @RequestParam("type") AnswerSheetType sheetType,
+            @RequestParam(value = "assignmentNumber", required = false) String assignmentNumber
+    ) {
+        Logger log = LoggerFactory.getLogger(TeacherController.class);
+
+        log.info("🔔 Received bulk upload request");
+        log.info("📁 File name: {}", zipFile.getOriginalFilename());
+        log.info("📦 File size: {} bytes", zipFile.getSize());
+        log.info("📘 Course Name: {}", courseName);
+        log.info("📄 Sheet Type: {}", sheetType);
+        log.info("📎 Assignment Number: {}", assignmentNumber);
+
+        if (sheetType == AnswerSheetType.ASSIGNMENT && (assignmentNumber == null || assignmentNumber.isBlank())) {
+            log.warn("❌ Assignment number is missing for ASSIGNMENT type upload");
+            return ResponseEntity.badRequest().body(Map.of("error", "Assignment number required for assignment upload"));
+        }
+
+        Optional<QuestionPaper> questionPaperOptional = switch (sheetType) {
+            case MIDTERM -> questionPaperRepository.findByCourse_CourseNameAndIsMidtermTrue(courseName);
+            case ENDTERM -> questionPaperRepository.findByCourse_CourseNameAndIsEndtermTrue(courseName);
+            case ASSIGNMENT -> {
+                if (assignmentNumber == null) yield Optional.empty();
+                yield questionPaperRepository.findByCourse_CourseNameAndIsAssignmentTrueAndAssignmentNumber(
+                        courseName, Integer.parseInt(assignmentNumber));
+            }
+            default -> Optional.empty();
+        };
+
+        if (questionPaperOptional.isEmpty()) {
+            log.error("❌ Question paper not found for course: {}, type: {}, assignmentNumber: {}", courseName, sheetType, assignmentNumber);
+            return ResponseEntity.badRequest().body(Map.of("error", "❌ Question paper for this course/type not found"));
+        }
+
+        if (!zipFile.getOriginalFilename().endsWith(".zip")) {
+            log.error("❌ Uploaded file is not a ZIP: {}", zipFile.getOriginalFilename());
+            return ResponseEntity.badRequest().body(Map.of("error", "❌ Only .zip files are allowed"));
+        }
+
+        try {
+            byte[] zipBytes = zipFile.getBytes(); // ✅ Eagerly read while temp file exists
+            String teacherUsername = SecurityContextHolder.getContext().getAuthentication().getName();
+
+            log.info("👤 Teacher uploading: {}", teacherUsername);
+            teacherService.processBulkZipUploadAsync(zipBytes, courseName, sheetType, assignmentNumber, teacherUsername);
+
+            log.info("✅ Async processing started for bulk ZIP");
+            return ResponseEntity.accepted().body(Map.of("message", "✅ Bulk upload started. You’ll be notified as uploads progress."));
+        } catch (Exception e) {
+            log.error("❌ Upload failed: {}", e.getMessage(), e);
+            return ResponseEntity.internalServerError().body(Map.of("error", "❌ Upload failed: " + e.getMessage()));
+        }
+    }
+
 
 
     private AppUser getCurrentUser() {

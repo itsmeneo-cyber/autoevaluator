@@ -68,4 +68,5 @@ public interface StudentRepository extends JpaRepository<Student, Long> {
             int semester
     );
 
+    Optional<Student> findByRollNo(String rollNo);
 }

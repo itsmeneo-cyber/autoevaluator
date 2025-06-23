@@ -33,4 +33,6 @@ public class AnswerScore {
 
     @Column(columnDefinition = "TEXT")
     private String answerText;   // stores detailed answer text
+
+    private String feedback;
 }

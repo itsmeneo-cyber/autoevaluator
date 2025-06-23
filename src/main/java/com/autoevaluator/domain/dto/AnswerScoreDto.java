@@ -16,4 +16,5 @@ public class AnswerScoreDto {
     private Integer totalMarks;
     private String answerText;
     private AnswerSheetType type;
+    private String feedback;
 }

@@ -10,8 +10,12 @@ import org.springframework.util.MultiValueMap;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.http.client.reactive.ReactorClientHttpConnector;
+import reactor.netty.http.client.HttpClient;
 
+import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.TimeoutException;
 
 @Component
 public class OcrClient {
@@ -24,10 +28,17 @@ public class OcrClient {
         if (ocrUrl == null || ocrUrl.isBlank()) {
             ocrUrl = Dotenv.configure().ignoreIfMissing().load().get("OCR_URL", "http://localhost:8000");
         }
-        this.webClient = WebClient.builder().baseUrl(ocrUrl).build();  // ✅ FIXED HERE
+
+        // Configure WebClient with 20s timeout
+        HttpClient httpClient = HttpClient.create()
+                .responseTimeout(Duration.ofSeconds(20));
+
+        this.webClient = WebClient.builder()
+                .baseUrl(ocrUrl)
+                .clientConnector(new ReactorClientHttpConnector(httpClient))
+                .build();
     }
 
-    // ✅ Multi-file version
     public String extractText(List<MultipartFile> files) {
         try {
             MultiValueMap<String, Object> formData = new LinkedMultiValueMap<>();
@@ -37,10 +48,10 @@ public class OcrClient {
                 ByteArrayResource resource = new ByteArrayResource(fileBytes) {
                     @Override
                     public String getFilename() {
-                        return file.getOriginalFilename(); // Required
+                        return file.getOriginalFilename(); // Required for multipart
                     }
                 };
-                formData.add("files", resource);  // Must match FastAPI param name: "files"
+                formData.add("files", resource); // Match FastAPI param name: "files"
             }
 
             JsonNode json = webClient.post()
@@ -49,16 +60,34 @@ public class OcrClient {
                     .body(BodyInserters.fromMultipartData(formData))
                     .retrieve()
                     .bodyToMono(JsonNode.class)
+                    .timeout(Duration.ofSeconds(20)) // Per-request timeout
                     .block();
 
-            if (json != null && json.has("extracted_text")) {
-                return json.get("extracted_text").asText();
+            if (json == null) {
+                throw new RuntimeException("OCR API returned no response");
             }
 
-            throw new RuntimeException("OCR API did not return expected response");
+            if (!json.has("extracted_text")) {
+                throw new RuntimeException("OCR API response missing 'extracted_text' field: " + json);
+            }
+
+            return json.get("extracted_text").asText();
 
         } catch (Exception e) {
+            if (isTimeoutException(e)) {
+                throw new RuntimeException("OCR request timed out after 20 seconds", e);
+            }
+
             throw new RuntimeException("Failed to call OCR API: " + e.getMessage(), e);
         }
+    }
+
+    // ✅ Helper to check if the root cause is a timeout
+    private boolean isTimeoutException(Throwable e) {
+        while (e != null) {
+            if (e instanceof TimeoutException) return true;
+            e = e.getCause();
+        }
+        return false;
     }
 }

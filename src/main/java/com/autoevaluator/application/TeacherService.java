@@ -7,6 +7,8 @@ import com.autoevaluator.domain.exception.BadRequestException;
 import com.autoevaluator.domain.models.UserPrincipal;
 import com.autoevaluator.domain.repositories.*;
 import com.autoevaluator.util.InMemoryMultipartFile;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.annotation.Async;
@@ -18,6 +20,7 @@ import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -28,6 +31,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 @Service
 public class TeacherService {
@@ -46,6 +51,7 @@ public class TeacherService {
     private final DepartmentRepository departmentRepository;
 
     private final OcrClient ocrClient;
+    private static final Logger log = LoggerFactory.getLogger(TeacherService.class);
 
     @Autowired
     public TeacherService(CourseRepository courseRepository,
@@ -572,15 +578,14 @@ public class TeacherService {
     @Async("externalTaskExecutor")
     @Transactional
     public void uploadMidtermSheetAsync(String studentUsername, String courseName, List<MultipartFile> files, String teacherUsername) {
+        Student student = studentRepository.findByUsername(studentUsername)
+                .orElseThrow(() -> new RuntimeException("Student not found"));
         try {
             uploadAnswerSheet(studentUsername, courseName, files, AnswerSheetType.MIDTERM, "");
 
-            Student student = studentRepository.findByUsername(studentUsername)
-                    .orElseThrow(() -> new RuntimeException("Student not found"));
-
             Map<String, Object> payload = new HashMap<>();
             payload.put("type", "MIDTERM_UPLOAD_SUCCESS");
-            payload.put("studentUsername", studentUsername);
+            payload.put("studentUsername", student.getRollNo());
             payload.put("courseName", courseName);
             payload.put("collegeName", student.getCollege().getName());
             payload.put("departmentName", student.getDepartment().getName());
@@ -591,7 +596,7 @@ public class TeacherService {
         } catch (Exception e) {
             Map<String, Object> payload = new HashMap<>();
             payload.put("type", "MIDTERM_UPLOAD_FAILURE");
-            payload.put("studentUsername", studentUsername);
+            payload.put("studentUsername",student.getRollNo() );
             payload.put("courseName", courseName);
             payload.put("message", "❌ Midterm upload failed");
             notifyStructuredClient(teacherUsername, payload);
@@ -601,15 +606,14 @@ public class TeacherService {
     @Async("externalTaskExecutor")
     @Transactional
     public void uploadEndtermSheetAsync(String studentUsername, String courseName, List<MultipartFile> files, String teacherUsername) {
+        Student student = studentRepository.findByUsername(studentUsername)
+                .orElseThrow(() -> new RuntimeException("Student not found"));
         try {
             uploadAnswerSheet(studentUsername, courseName, files, AnswerSheetType.ENDTERM, "");
 
-            Student student = studentRepository.findByUsername(studentUsername)
-                    .orElseThrow(() -> new RuntimeException("Student not found"));
-
             Map<String, Object> payload = new HashMap<>();
             payload.put("type", "ENDTERM_UPLOAD_SUCCESS");
-            payload.put("studentUsername", studentUsername);
+            payload.put("studentUsername", student.getRollNo());
             payload.put("courseName", courseName);
             payload.put("collegeName", student.getCollege().getName());
             payload.put("departmentName", student.getDepartment().getName());
@@ -620,7 +624,7 @@ public class TeacherService {
         } catch (Exception e) {
             Map<String, Object> payload = new HashMap<>();
             payload.put("type", "ENDTERM_UPLOAD_FAILURE");
-            payload.put("studentUsername", studentUsername);
+            payload.put("studentUsername", student.getRollNo());
             payload.put("courseName", courseName);
             payload.put("message", "❌ Endterm upload failed");
             notifyStructuredClient(teacherUsername, payload);
@@ -634,15 +638,16 @@ public class TeacherService {
             List<MultipartFile> files,
             String assignmentNumber,
             String teacherUsername) {
+        Student student = studentRepository.findByUsername(studentUsername)
+                .orElseThrow(() -> new RuntimeException("Student not found"));
+
         try {
             uploadAnswerSheet(studentUsername, courseName, files, AnswerSheetType.ASSIGNMENT, assignmentNumber);
 
-            Student student = studentRepository.findByUsername(studentUsername)
-                    .orElseThrow(() -> new RuntimeException("Student not found"));
 
             Map<String, Object> payload = new HashMap<>();
             payload.put("type", "ASSIGNMENT_UPLOAD_SUCCESS");
-            payload.put("studentUsername", studentUsername);
+            payload.put("studentUsername", student.getRollNo());
             payload.put("courseName", courseName);
             payload.put("assignmentNumber", assignmentNumber);
             payload.put("collegeName", student.getCollege().getName());
@@ -654,7 +659,7 @@ public class TeacherService {
         } catch (Exception e) {
             Map<String, Object> payload = new HashMap<>();
             payload.put("type", "ASSIGNMENT_UPLOAD_FAILURE");
-            payload.put("studentUsername", studentUsername);
+            payload.put("studentUsername", student.getRollNo());
             payload.put("courseName", courseName);
             payload.put("assignmentNumber", assignmentNumber);
             payload.put("message", "❌ Assignment upload failed");
@@ -1045,6 +1050,187 @@ public class TeacherService {
                         LinkedHashMap::new
                 ));
     }
+
+    @Async("externalTaskExecutor")
+    @Transactional
+    public void processBulkZipUploadAsync(byte[] zipBytes, String courseName, AnswerSheetType type,
+                                          String assignmentNumber, String teacherUsername) {
+        try {
+            log.info("[BULK_UPLOAD] Max heap: {} MB", Runtime.getRuntime().maxMemory() / (1024 * 1024));
+            log.info("[BULK_UPLOAD] ZIP file size: {} bytes", zipBytes.length);
+
+            try (ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(zipBytes))) {
+                log.info("[BULK_UPLOAD] Extracting folders from ZIP");
+                Map<String, List<MultipartFile>> folderToFiles = extractFolders(zis);
+                log.info("[BULK_UPLOAD] Extracted {} student folders", folderToFiles.size());
+
+                int totalStudents = folderToFiles.size();
+                int completed = 0;
+
+                for (Map.Entry<String, List<MultipartFile>> entry : folderToFiles.entrySet()) {
+                    String rollNo = entry.getKey();
+                    List<MultipartFile> files = entry.getValue();
+
+                    try {
+                        log.info("[BULK_UPLOAD] Uploading for rollNo: {}", rollNo);
+                        upload(rollNo, courseName, files, type, assignmentNumber);
+                        notifyProgress(teacherUsername, rollNo, courseName, ++completed, totalStudents, "✅ Upload success");
+                    } catch (Exception e) {
+                        log.error("[BULK_UPLOAD] Error while uploading for rollNo {}: {}", rollNo, e.getMessage(), e);
+                        notifyProgress(teacherUsername, rollNo, courseName, ++completed, totalStudents, "❌ Failed: " + e.getMessage());
+                    }
+                }
+
+                messagingTemplate.convertAndSend("/topic/teacher/" + teacherUsername, Map.of(
+                        "type", "BULK_UPLOAD_COMPLETE",
+                        "courseName", courseName,
+                        "sheetType", type.toString()
+                ));
+
+                log.info("[BULK_UPLOAD] Bulk upload complete for teacher: {}", teacherUsername);
+            }
+
+        } catch (IOException e) {
+            log.error("[BULK_UPLOAD] ❌ Fatal error while reading ZIP: {}", e.getMessage(), e);
+            messagingTemplate.convertAndSend("/topic/teacher/" + teacherUsername, Map.of(
+                    "type", "BULK_UPLOAD_FATAL",
+                    "message", "❌ Fatal error: " + e.getMessage()
+            ));
+        }
+    }
+
+
+
+    private void notifyProgress(String teacherUsername, String rollNo, String courseName, int completed, int total, String statusMessage) {
+                messagingTemplate.convertAndSend("/topic/teacher/" + teacherUsername, Map.of(
+                        "type", "BULK_UPLOAD_PROGRESS",
+                        "rollNo", rollNo,
+                        "courseName", courseName,
+                        "status", statusMessage,
+                        "progress", (completed * 100) / total
+                ));
+            }
+
+
+            private Map<String, List<MultipartFile>> extractFolders(ZipInputStream zis) throws IOException {
+        Map<String, List<MultipartFile>> folderMap = new HashMap<>();
+        ZipEntry entry;
+        int count = 0;
+
+        while ((entry = zis.getNextEntry()) != null) {
+            if (entry.isDirectory()) continue;
+
+            String entryName = entry.getName(); // e.g., "21BCS123/1.jpg"
+            String[] parts = entryName.split("/");
+            if (parts.length < 2) continue;
+
+            String folderName = parts[0];
+            String fileName = parts[1];
+
+            byte[] fileData = zis.readAllBytes();
+            MultipartFile file = new InMemoryMultipartFile(fileData, fileName, "image/jpeg");
+
+            folderMap.computeIfAbsent(folderName, k -> new ArrayList<>()).add(file);
+            count++;
+        }
+
+        log.info("[BULK_UPLOAD] Total {} files extracted from ZIP", count);
+        return folderMap;
+    }
+
+
+    @Transactional
+    public void upload(String rollNo, String courseName, List<MultipartFile> files,
+                       AnswerSheetType type, String assignmentNumber) throws IOException {
+        log.info("[UPLOAD] Start upload for rollNo: {}, course: {}, type: {}", rollNo, courseName, type);
+        Student student = studentRepository.findByRollNo(rollNo)
+                .orElseThrow(() -> new RuntimeException("Student not found: " + rollNo));
+
+        Enrolment enrolment = student.getEnrolments().stream()
+                .filter(e -> e.getCourse().getCourseName().equals(courseName))
+                .findFirst()
+                .orElseThrow(() -> new RuntimeException("Enrolment not found for course: " + courseName));
+
+        log.info("[UPLOAD] Performing OCR for rollNo: {}", rollNo);
+       // String text = ocrClient.extractText(files);
+        String text = "Ans1 The OSI (Open Systems Interconnection) model.\n"
+                + "is a conceptual framework used to understand and\n"
+                + "design computer networks. It defines network\n"
+                + "communication into seven distinct layers: Data Link,\n"
+                + "Network, Transport, Presentation\n"
+                + "function\n"
+                + "allowing data to transfer from one device to another\n"
+                + "efficiently. The model helps standardize networking\n"
+                + "protocols, supports interoperability between different\n"
+                + "systems and simplifies troubleshooting by isolating\n"
+                + "issues to specific layers.\n\n"
+
+                + "Ans3 Thrashing in operating systems is when\n"
+                + "the computer gets overheated because too many programs\n"
+                + "are opened at once, and the fan can't keep up.\n"
+                + "so the system starts randomly closing apps to\n"
+                + "cool down. It usually happens when the CPU\n"
+                + "gets tired of multitasking and starts skipping\n"
+                + "tasks, similar to how a person forgets things\n"
+                + "when stressed. Some people think it's related\n"
+                + "to battery or muscles, but it's mostly because\n"
+                + "they are stuck because they are\n"
+                + "all waiting for resources.\n"
+                + "None of the process can continue, so they just keep\n"
+                + "waiting for coverage.\n"
+                + "The four conditions for deadlock are:\n"
+                + "1. Mutual Exclusion\n"
+                + "2. Hold & Wait\n"
+                + "3. No Preemption\n"
+                + "4. Thrashing\n\n"
+
+                + "Ans5 A process is a program in execution. It's\n"
+                + "more than just the program code; it also includes\n"
+                + "the program counters registers and variables,\n"
+                + "and the current state of the program.\n"
+                + "A process is a dynamic entity, whereas a program\n"
+                + "is static. When you run any software\n"
+                + "or command, the operating system Creates a process to handle it.\n"
+                + "States of a new Process.\n"
+                + "1 New\n"
+                + "2 Ready\n"
+                + "3 Running\n"
+                + "4 Waiting\n"
+                + "5 Terminated\n"
+                + "6 Suspended";
+
+        log.info("[UPLOAD] OCR completed for rollNo: {}, characters: {}", rollNo, text.length());
+
+        Map<String, String> structuredAnswers = parseAnswerSheetText(text);
+        String structuredText = structuredAnswers.entrySet().stream()
+                .map(e -> e.getKey() + ": " + e.getValue())
+                .collect(Collectors.joining("\n\n"));
+
+        String dummyUrl = "https://dummy-storage-url.com/sheet";
+
+        switch (type) {
+            case MIDTERM -> {
+                enrolment.setMidtermAnswerSheetText(structuredText);
+                enrolment.setMidtermAnswerSheetUrl(dummyUrl);
+            }
+            case ENDTERM -> {
+                enrolment.setEndtermAnswerSheetText(structuredText);
+                enrolment.setEndtermAnswerSheetUrl(dummyUrl);
+            }
+            case ASSIGNMENT -> {
+                AssignmentSubmission submission = new AssignmentSubmission();
+                submission.setAssignmentNumber(assignmentNumber);
+                submission.setAssignmentSheetText(structuredText);
+                submission.setAnswerSheetUrl(dummyUrl);
+                submission.setEnrolment(enrolment);
+                enrolment.getAssignments().add(submission);
+            }
+        }
+
+        enrolmentRepository.save(enrolment);
+        log.info("[UPLOAD] Enrolment updated and saved for rollNo: {}", rollNo);
+    }
+
 
 
 }

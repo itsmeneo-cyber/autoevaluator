@@ -2,6 +2,7 @@ package com.autoevaluator.adapter.handler.rest;
 
 import com.autoevaluator.application.EvaluationService;
 import com.autoevaluator.domain.dto.AnswerScoreDto;
+import com.autoevaluator.domain.dto.BulkEvaluateRequest;
 import com.autoevaluator.domain.dto.EvaluationResponseDto;
 import com.autoevaluator.domain.entity.AppUser;
 import com.autoevaluator.domain.models.UserPrincipal;
@@ -11,6 +12,8 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -28,7 +31,7 @@ public class EvaluationController extends BaseRestController {
 
     private final EvaluationService evaluationService;
     private final AppUserRepository appUserRepository;
-
+    private static final Logger log = LoggerFactory.getLogger(EvaluationController.class);
     @Autowired
     private TaskRateLimiter taskRateLimiter;
 
@@ -106,7 +109,62 @@ public class EvaluationController extends BaseRestController {
                 "message", "✅ Assignment evaluation started. You will be notified once complete."
         ));
     }
+    @PostMapping("/bulkEvaluateAnswerSheets")
+    @Operation(summary = "Bulk Evaluate Answer Sheets",
+            description = "Initiates evaluation for all uploaded answer sheets of a given type in a course.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "202", description = "Bulk evaluation accepted and started."),
+            @ApiResponse(responseCode = "400", description = "Invalid request parameters.")
+    })
+    public ResponseEntity<?> bulkEvaluateAnswerSheets(@RequestBody BulkEvaluateRequest request) {
+        log.info("[BULK_EVALUATE] Received bulk evaluate request: {}", request);
 
+        String courseName = request.getCourseName();
+        String type = request.getEvaluationType(); // MIDTERM, ENDTERM, ASSIGNMENT
+        Integer assignmentNumber = request.getAssignmentNumber();
+        String teacherUsername = getCurrentUser().getUsername();
+
+        if (courseName == null || type == null) {
+            log.warn("[BULK_EVALUATE] Missing courseName or type in request: {}", request);
+            return ResponseEntity.badRequest()
+                    .body(new ErrorResponse(400, "❌ courseName and type are required."));
+        }
+
+        log.info("[BULK_EVALUATE] Starting bulk evaluation for course: {}, type: {}, teacher: {}", courseName, type, teacherUsername);
+
+        switch (type.toUpperCase()) {
+            case "MIDTERM":
+                log.info("[BULK_EVALUATE] Triggering bulkEvaluateMidtermAsync");
+                evaluationService.bulkEvaluateMidtermAsync(courseName, teacherUsername);
+                break;
+
+            case "ENDTERM":
+                log.info("[BULK_EVALUATE] Triggering bulkEvaluateEndtermAsync");
+                evaluationService.bulkEvaluateEndtermAsync(courseName, teacherUsername);
+                break;
+
+            case "ASSIGNMENT":
+                if (assignmentNumber == null) {
+                    log.warn("[BULK_EVALUATE] assignmentNumber is required for ASSIGNMENT evaluation but was null");
+                    return ResponseEntity.badRequest()
+                            .body(new ErrorResponse(400, "❌ assignmentNumber is required for ASSIGNMENT evaluation."));
+                }
+                log.info("[BULK_EVALUATE] Triggering bulkEvaluateAssignmentAsync for assignmentNumber: {}", assignmentNumber);
+                evaluationService.bulkEvaluateAssignmentAsync(courseName, assignmentNumber, teacherUsername);
+                break;
+
+            default:
+                log.warn("[BULK_EVALUATE] Invalid sheet type received: {}", type);
+                return ResponseEntity.badRequest()
+                        .body(new ErrorResponse(400, "❌ Invalid sheet type. Allowed: MIDTERM, ENDTERM, ASSIGNMENT."));
+        }
+
+        log.info("[BULK_EVALUATE] Bulk evaluation accepted and started for course: {}", courseName);
+
+        return ResponseEntity.accepted().body(Map.of(
+                "message", "✅ Bulk evaluation started. You will be notified as evaluations complete."
+        ));
+    }
 
 
 
