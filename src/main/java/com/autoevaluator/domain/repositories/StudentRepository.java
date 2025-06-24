@@ -67,6 +67,12 @@ public interface StudentRepository extends JpaRepository<Student, Long> {
             Department department,
             int semester
     );
+    Optional<Student> findByRollNoAndCollegeAndDepartmentAndSemester(
+            String rollNo,
+            College college,
+            Department department,
+            int semester
+    );
 
     Optional<Student> findByRollNo(String rollNo);
 }

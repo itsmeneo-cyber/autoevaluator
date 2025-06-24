@@ -273,7 +273,11 @@ public class EvaluationService {
             int questionMarks = question.getMarks().intValue();
 
             CompareAnswersResponse response = callScoringApi(correctAnswer, studentAnswer, questionMarks);
-            String feedback = FeedbackGenerator.generateFeedback(response.getEntailment(),response.getNeutral(),response.getContradiction());
+            String feedback = "";
+            if(response.getScore()==0)
+                feedback= "No answer provided";
+            else
+                feedback= FeedbackGenerator.generateFeedback(response.getEntailment(),response.getNeutral(),response.getContradiction());
 
             AnswerScore answerScore = AnswerScore.builder()
                     .answerLabel(qNo)

@@ -463,7 +463,7 @@ public class TeacherService {
         Course course = courseRepository.findByCourseName(courseName)
                 .orElseThrow(() -> new RuntimeException("Course not found"));
 
-        Student student = studentRepository.findByUsernameAndCollegeAndDepartmentAndSemester(
+        Student student = studentRepository.findByRollNoAndCollegeAndDepartmentAndSemester(
                 studentUsername, college, department, semester
         ).orElseThrow(() -> new RuntimeException("Student not found"));
 
@@ -1152,52 +1152,8 @@ public class TeacherService {
                 .orElseThrow(() -> new RuntimeException("Enrolment not found for course: " + courseName));
 
         log.info("[UPLOAD] Performing OCR for rollNo: {}", rollNo);
-       // String text = ocrClient.extractText(files);
-        String text = "Ans1 The OSI (Open Systems Interconnection) model.\n"
-                + "is a conceptual framework used to understand and\n"
-                + "design computer networks. It defines network\n"
-                + "communication into seven distinct layers: Data Link,\n"
-                + "Network, Transport, Presentation\n"
-                + "function\n"
-                + "allowing data to transfer from one device to another\n"
-                + "efficiently. The model helps standardize networking\n"
-                + "protocols, supports interoperability between different\n"
-                + "systems and simplifies troubleshooting by isolating\n"
-                + "issues to specific layers.\n\n"
+        String text = ocrClient.extractText(files);
 
-                + "Ans3 Thrashing in operating systems is when\n"
-                + "the computer gets overheated because too many programs\n"
-                + "are opened at once, and the fan can't keep up.\n"
-                + "so the system starts randomly closing apps to\n"
-                + "cool down. It usually happens when the CPU\n"
-                + "gets tired of multitasking and starts skipping\n"
-                + "tasks, similar to how a person forgets things\n"
-                + "when stressed. Some people think it's related\n"
-                + "to battery or muscles, but it's mostly because\n"
-                + "they are stuck because they are\n"
-                + "all waiting for resources.\n"
-                + "None of the process can continue, so they just keep\n"
-                + "waiting for coverage.\n"
-                + "The four conditions for deadlock are:\n"
-                + "1. Mutual Exclusion\n"
-                + "2. Hold & Wait\n"
-                + "3. No Preemption\n"
-                + "4. Thrashing\n\n"
-
-                + "Ans5 A process is a program in execution. It's\n"
-                + "more than just the program code; it also includes\n"
-                + "the program counters registers and variables,\n"
-                + "and the current state of the program.\n"
-                + "A process is a dynamic entity, whereas a program\n"
-                + "is static. When you run any software\n"
-                + "or command, the operating system Creates a process to handle it.\n"
-                + "States of a new Process.\n"
-                + "1 New\n"
-                + "2 Ready\n"
-                + "3 Running\n"
-                + "4 Waiting\n"
-                + "5 Terminated\n"
-                + "6 Suspended";
 
         log.info("[UPLOAD] OCR completed for rollNo: {}, characters: {}", rollNo, text.length());
 
