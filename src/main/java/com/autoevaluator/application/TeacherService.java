@@ -11,6 +11,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.retry.annotation.Backoff;
+import org.springframework.retry.annotation.Retryable;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -576,6 +578,10 @@ public class TeacherService {
         return sortedResponses;
     }
     @Async("externalTaskExecutor")
+    @Retryable(
+            value = { Exception.class },
+            maxAttempts = 3,
+            backoff = @Backoff(delay = 2000))
     @Transactional
     public void uploadMidtermSheetAsync(String studentUsername, String courseName, List<MultipartFile> files, String teacherUsername) {
         Student student = studentRepository.findByUsername(studentUsername)
@@ -596,12 +602,15 @@ public class TeacherService {
         } catch (Exception e) {
             Map<String, Object> payload = new HashMap<>();
             payload.put("type", "MIDTERM_UPLOAD_FAILURE");
-            payload.put("studentUsername",student.getRollNo() );
+            payload.put("studentUsername", student.getRollNo());
             payload.put("courseName", courseName);
             payload.put("message", "❌ Midterm upload failed");
             notifyStructuredClient(teacherUsername, payload);
+
+            throw e; // important: rethrow to trigger retry
         }
     }
+
 
     @Async("externalTaskExecutor")
     @Transactional
@@ -1053,6 +1062,10 @@ public class TeacherService {
 
     @Async("externalTaskExecutor")
     @Transactional
+    @Retryable(
+            value = { Exception.class },
+            maxAttempts = 3,
+            backoff = @Backoff(delay = 2000))
     public void processBulkZipUploadAsync(byte[] zipBytes, String courseName, AnswerSheetType type,
                                           String assignmentNumber, String teacherUsername) {
         try {

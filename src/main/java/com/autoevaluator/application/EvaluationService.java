@@ -16,6 +16,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.retry.annotation.Backoff;
+import org.springframework.retry.annotation.Retryable;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -46,6 +48,10 @@ public class EvaluationService {
 
     @Async("externalTaskExecutor")
     @Transactional
+    @Retryable(
+            value = { Exception.class },
+            maxAttempts = 3,
+            backoff = @Backoff(delay = 2000))
     public void evaluateMidtermAsync(String studentUsername, String courseName, String teacherUsername) {
         Student student = studentRepository.findByUsername(studentUsername)
                 .orElseThrow(() -> new RuntimeException("Student not found"));
@@ -554,6 +560,10 @@ public class EvaluationService {
 
     @Async("externalTaskExecutor")
     @Transactional
+    @Retryable(
+            value = { Exception.class },
+            maxAttempts = 3,
+            backoff = @Backoff(delay = 2000))
     public void bulkEvaluateMidtermAsync(String courseName, String teacherUsername) {
         List<Enrolment> enrolments = enrolmentRepository.findByCourse_CourseName(courseName);
         int total = enrolments.size();
