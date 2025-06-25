@@ -44,7 +44,7 @@ public class EvaluationController extends BaseRestController {
             @ApiResponse(responseCode = "429", description = "Too many requests.")
     })
     public ResponseEntity<?> evaluateMidterm(@RequestParam String studentUsername,
-                                             @RequestParam String courseName) {
+                                             @RequestParam String courseName) throws Exception {
 
         if (!taskRateLimiter.canExecute(studentUsername, courseName, "EVALUATE_MIDTERM", null)) {
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
@@ -116,7 +116,7 @@ public class EvaluationController extends BaseRestController {
             @ApiResponse(responseCode = "202", description = "Bulk evaluation accepted and started."),
             @ApiResponse(responseCode = "400", description = "Invalid request parameters.")
     })
-    public ResponseEntity<?> bulkEvaluateAnswerSheets(@RequestBody BulkEvaluateRequest request) {
+    public ResponseEntity<?> bulkEvaluateAnswerSheets(@RequestBody BulkEvaluateRequest request) throws Exception {
         log.info("[BULK_EVALUATE] Received bulk evaluate request: {}", request);
 
         String courseName = request.getCourseName();

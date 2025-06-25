@@ -52,7 +52,7 @@ public class EvaluationService {
             value = { Exception.class },
             maxAttempts = 3,
             backoff = @Backoff(delay = 2000))
-    public void evaluateMidtermAsync(String studentUsername, String courseName, String teacherUsername) {
+    public void evaluateMidtermAsync(String studentUsername, String courseName, String teacherUsername) throws Exception {
         Student student = studentRepository.findByUsername(studentUsername)
                 .orElseThrow(() -> new RuntimeException("Student not found"));
         try {
@@ -83,6 +83,7 @@ public class EvaluationService {
             payload.put("studentUsername", student.getRollNo());
             payload.put("courseName", courseName);
             notifyStructuredClient(teacherUsername, payload);
+            throw e;
         }
     }
     @Async("externalTaskExecutor")
@@ -564,7 +565,7 @@ public class EvaluationService {
             value = { Exception.class },
             maxAttempts = 3,
             backoff = @Backoff(delay = 2000))
-    public void bulkEvaluateMidtermAsync(String courseName, String teacherUsername) {
+    public void bulkEvaluateMidtermAsync(String courseName, String teacherUsername) throws Exception {
         List<Enrolment> enrolments = enrolmentRepository.findByCourse_CourseName(courseName);
         int total = enrolments.size();
         int completed = 0;
@@ -602,6 +603,7 @@ public class EvaluationService {
                 payload.put("progress", (completed * 100) / total);
                 notifyProgress(teacherUsername, enrolment.getStudent().getRollNo(), courseName, completed, total, "❌ Evaluation Failed");
                 notifyStructuredClient2(teacherUsername, payload);
+                throw  e;
             }
         }
 
@@ -653,6 +655,7 @@ public class EvaluationService {
                 payload.put("progress", (completed * 100) / total);
                 notifyProgress(teacherUsername, rollNo, courseName, completed, total, "❌ Evaluation Failed");
                 notifyStructuredClient2(teacherUsername, payload);
+                throw  e;
             }
         }
 

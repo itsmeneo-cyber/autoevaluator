@@ -1067,7 +1067,7 @@ public class TeacherService {
             maxAttempts = 3,
             backoff = @Backoff(delay = 2000))
     public void processBulkZipUploadAsync(byte[] zipBytes, String courseName, AnswerSheetType type,
-                                          String assignmentNumber, String teacherUsername) {
+                                          String assignmentNumber, String teacherUsername) throws IOException {
         try {
             log.info("[BULK_UPLOAD] Max heap: {} MB", Runtime.getRuntime().maxMemory() / (1024 * 1024));
             log.info("[BULK_UPLOAD] ZIP file size: {} bytes", zipBytes.length);
@@ -1109,6 +1109,8 @@ public class TeacherService {
                     "type", "BULK_UPLOAD_FATAL",
                     "message", "❌ Fatal error: " + e.getMessage()
             ));
+            throw e;
+
         }
     }
 
